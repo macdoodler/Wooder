@@ -176,7 +176,11 @@ export class ConstraintProcessor {
    * Check grain direction compatibility (PRIMARY CONSTRAINT)
    */
   static checkGrainCompatibility(part: ProcessedPart, stock: OptimizedStock): GrainCompatibilityResult {
-    if (!part.grainDirection || !stock.grainDirection) {
+    // Handle 'any' grain direction as no constraints
+    const hasPartGrainConstraint = part.grainDirection && part.grainDirection.toLowerCase() !== 'any';
+    const hasStockGrainConstraint = stock.grainDirection && stock.grainDirection.toLowerCase() !== 'any';
+    
+    if (!hasPartGrainConstraint || !hasStockGrainConstraint) {
       // No grain constraints - direct placement possible
       return {
         compatible: true,
@@ -185,8 +189,8 @@ export class ConstraintProcessor {
       };
     }
 
-    const stockGrain = stock.grainDirection.toLowerCase();
-    const partGrain = part.grainDirection.toLowerCase();
+    const stockGrain = stock.grainDirection!.toLowerCase();
+    const partGrain = part.grainDirection!.toLowerCase();
 
     if (stockGrain === partGrain) {
       // Direct placement maintains grain alignment
@@ -292,53 +296,109 @@ export class PlacementEngine {
     
     if (!grainResult.compatible) return null;
 
-    const partDimensions = grainResult.dimensions;
-    const isRotated = grainResult.placement === 'rotated';
-    
     const placementOptions: OptimalPlacement[] = [];
 
-    // Test all free spaces
-    for (let spaceIndex = 0; spaceIndex < freeSpaces.length; spaceIndex++) {
-      const space = freeSpaces[spaceIndex];
-      
-      // Check if part fits in this space (including kerf)
-      const requiredWidth = partDimensions.length + kerfThickness;
-      const requiredHeight = partDimensions.width + kerfThickness;
+    // Determine orientations to test
+    const orientationsToTest: Array<{dimensions: {length: number, width: number, thickness: number}, rotated: boolean}> = [];
+    
+    // Check if we have actual grain constraints (not 'any')
+    const hasPartGrainConstraint = part.grainDirection && part.grainDirection.toLowerCase() !== 'any';
+    const hasStockGrainConstraint = stock.grainDirection && stock.grainDirection.toLowerCase() !== 'any';
+    
+    if (!hasPartGrainConstraint || !hasStockGrainConstraint) {
+      // No grain constraints - test both orientations for better packing
+      orientationsToTest.push(
+        { dimensions: { length: part.length, width: part.width, thickness: part.thickness }, rotated: false },
+        { dimensions: { length: part.width, width: part.length, thickness: part.thickness }, rotated: true }
+      );
+    } else {
+      // Grain constraints - use only the compatible orientation
+      orientationsToTest.push({
+        dimensions: grainResult.dimensions,
+        rotated: grainResult.placement === 'rotated'
+      });
+    }
 
-      if (requiredWidth <= space.width && requiredHeight <= space.height) {
-        // Position at space origin for optimal packing
-        const testPosition = { x: space.x, y: space.y };
+    // Sort spaces to prioritize better packing: bottom-left preference and larger usable areas
+    const sortedSpaces = freeSpaces
+      .map((space, index) => ({ space, index }))
+      .sort((a, b) => {
+        // First priority: bottom-left positioning (lower Y, then lower X)
+        if (Math.abs(a.space.y - b.space.y) > 1) {
+          return a.space.y - b.space.y;
+        }
+        if (Math.abs(a.space.x - b.space.x) > 1) {
+          return a.space.x - b.space.x;
+        }
+        
+        // Second priority: prefer spaces that can fit multiple parts (better for grid packing)
+        const aCanFitMultiple = (a.space.width >= 800 + kerfThickness * 2) || (a.space.height >= 400 + kerfThickness * 2);
+        const bCanFitMultiple = (b.space.width >= 800 + kerfThickness * 2) || (b.space.height >= 400 + kerfThickness * 2);
+        
+        if (aCanFitMultiple && !bCanFitMultiple) return -1;
+        if (!aCanFitMultiple && bCanFitMultiple) return 1;
+        
+        // Third priority: minimize waste (smaller space is better for tight fit)
+        return (a.space.width * a.space.height) - (b.space.width * b.space.height);
+      });
 
-        // Check collision with existing parts
-        if (!this.hasCollision(testPosition, partDimensions, existingPlacements, kerfThickness, allParts)) {
-          // Calculate efficiency metrics
-          const wasteArea = (space.width * space.height) - (partDimensions.length * partDimensions.width);
-          const efficiency = (partDimensions.length * partDimensions.width) / (space.width * space.height);
+    // Test all orientation and space combinations
+    for (const orientation of orientationsToTest) {
+      for (const { space, index: spaceIndex } of sortedSpaces) {
+        // Check if part fits in this space (including kerf)
+        const requiredWidth = orientation.dimensions.length + kerfThickness;
+        const requiredHeight = orientation.dimensions.width + kerfThickness;
 
-          const placement: Placement = {
-            partId: `Part-${part.partIndex}`,
-            x: testPosition.x,
-            y: testPosition.y,
-            rotated: isRotated,
-            name: part.name || `Part-${part.partIndex}`
-          };
+        if (requiredWidth <= space.width && requiredHeight <= space.height) {
+          // Position at space origin for optimal packing
+          const testPosition = { x: space.x, y: space.y };
 
-          placementOptions.push({
-            placement,
-            spaceIndex,
-            wasteArea,
-            efficiency,
-            grainCompliant: true
-          });
+          // Check collision with existing parts
+          if (!this.hasCollision(testPosition, orientation.dimensions, existingPlacements, kerfThickness, allParts)) {
+            // Calculate efficiency metrics with improved scoring
+            const spaceArea = space.width * space.height;
+            const partArea = orientation.dimensions.length * orientation.dimensions.width;
+            const wasteArea = spaceArea - partArea;
+            const efficiency = partArea / spaceArea;
+            
+            // Bonus for grid-friendly positioning (positions that align with common part dimensions)
+            let positionScore = 0;
+            const gridX = Math.round(testPosition.x / (orientation.dimensions.length + kerfThickness));
+            const gridY = Math.round(testPosition.y / (orientation.dimensions.width + kerfThickness));
+            if (Math.abs(testPosition.x - gridX * (orientation.dimensions.length + kerfThickness)) < 1) positionScore += 10;
+            if (Math.abs(testPosition.y - gridY * (orientation.dimensions.width + kerfThickness)) < 1) positionScore += 10;
+
+            // Bonus for rectangular grid packing (prefer orientations that fit nicely in available space)
+            const widthUtilization = requiredWidth / space.width;
+            const heightUtilization = requiredHeight / space.height;
+            const utilization = Math.min(widthUtilization, heightUtilization);
+            positionScore += utilization * 50; // Up to 50 point bonus for good space utilization
+
+            const placement: Placement = {
+              partId: `Part-${part.partIndex}`,
+              x: testPosition.x,
+              y: testPosition.y,
+              rotated: orientation.rotated,
+              name: part.name || `Part-${part.partIndex}`
+            };
+
+            placementOptions.push({
+              placement,
+              spaceIndex,
+              wasteArea,
+              efficiency: efficiency + (positionScore / 1000), // Small bonus for grid alignment
+              grainCompliant: true
+            });
+          }
         }
       }
     }
 
-    // Return best placement (minimize waste, maximize efficiency)
+    // Return best placement (maximize efficiency, minimize waste)
     if (placementOptions.length > 0) {
       return placementOptions.sort((a, b) => {
         // Prioritize higher efficiency
-        if (Math.abs(a.efficiency - b.efficiency) > 0.1) {
+        if (Math.abs(a.efficiency - b.efficiency) > 0.01) {
           return b.efficiency - a.efficiency;
         }
         // Then minimize waste
@@ -364,6 +424,9 @@ export class PlacementEngine {
     const newTop = newPosition.y;
     const newBottom = newPosition.y + newDimensions.width + kerfThickness;
 
+    // CRITICAL FIX: Add floating point tolerance to prevent precision errors
+    const TOLERANCE = 0.01; // 0.01mm tolerance for floating point precision
+
     return existingPlacements.some(existing => {
       // Extract part index from partId (format: "Part-X-Y")
       const partIdMatch = existing.partId.match(/Part-(\d+)/);
@@ -388,16 +451,16 @@ export class PlacementEngine {
       const existingTop = existing.y;
       const existingBottom = existing.y + existingHeight + kerfThickness;
 
-      // Check rectangle overlap
-      const xOverlap = !(newRight <= existingLeft || newLeft >= existingRight);
-      const yOverlap = !(newBottom <= existingTop || newTop >= existingBottom);
+      // Check rectangle overlap with floating point tolerance
+      const xOverlap = !(newRight <= existingLeft + TOLERANCE || newLeft >= existingRight - TOLERANCE);
+      const yOverlap = !(newBottom <= existingTop + TOLERANCE || newTop >= existingBottom - TOLERANCE);
 
       return xOverlap && yOverlap;
     });
   }
 
   /**
-   * Update free spaces after placement using guillotine method
+   * Update free spaces after placement using improved guillotine method for rectangular packing
    */
   static updateFreeSpaces(
     freeSpaces: FreeSpace[],
@@ -415,32 +478,71 @@ export class PlacementEngine {
     const partWidth = partDimensions.length + kerfThickness;
     const partHeight = partDimensions.width + kerfThickness;
 
-    // Create new spaces using guillotine split
+    // Create new spaces using improved guillotine split for better rectangular packing
     const splitSpaces: FreeSpace[] = [];
 
-    // Right space
+    // Right space (only if significant width remains)
     if (usedSpace.x + usedSpace.width > placement.x + partWidth) {
-      splitSpaces.push({
-        x: placement.x + partWidth,
-        y: usedSpace.y,
-        width: (usedSpace.x + usedSpace.width) - (placement.x + partWidth),
-        height: usedSpace.height
-      });
+      const rightWidth = (usedSpace.x + usedSpace.width) - (placement.x + partWidth);
+      if (rightWidth > partWidth * 0.5) { // Only create if reasonably sized
+        splitSpaces.push({
+          x: placement.x + partWidth,
+          y: usedSpace.y,
+          width: rightWidth,
+          height: usedSpace.height
+        });
+      }
     }
 
-    // Bottom space
+    // Bottom space (prioritize this for better grid packing)
     if (usedSpace.y + usedSpace.height > placement.y + partHeight) {
-      splitSpaces.push({
-        x: usedSpace.x,
-        y: placement.y + partHeight,
-        width: usedSpace.width,
-        height: (usedSpace.y + usedSpace.height) - (placement.y + partHeight)
-      });
+      const bottomHeight = (usedSpace.y + usedSpace.height) - (placement.y + partHeight);
+      if (bottomHeight > partHeight * 0.5) { // Only create if reasonably sized
+        splitSpaces.push({
+          x: usedSpace.x,
+          y: placement.y + partHeight,
+          width: usedSpace.width,
+          height: bottomHeight
+        });
+      }
     }
 
-    // Filter out invalid spaces
-    const validSpaces = splitSpaces.filter(space => space.width > 0 && space.height > 0);
+    // Left space (only if placement isn't at left edge)
+    if (placement.x > usedSpace.x) {
+      const leftWidth = placement.x - usedSpace.x;
+      if (leftWidth > partWidth * 0.5) { // Only create if reasonably sized
+        splitSpaces.push({
+          x: usedSpace.x,
+          y: usedSpace.y,
+          width: leftWidth,
+          height: usedSpace.height
+        });
+      }
+    }
+
+    // Top space (only if placement isn't at top edge)
+    if (placement.y > usedSpace.y) {
+      const topHeight = placement.y - usedSpace.y;
+      if (topHeight > partHeight * 0.5) { // Only create if reasonably sized
+        splitSpaces.push({
+          x: usedSpace.x,
+          y: usedSpace.y,
+          width: usedSpace.width,
+          height: topHeight
+        });
+      }
+    }
+
+    // Filter out invalid spaces and merge small adjacent spaces
+    const validSpaces = splitSpaces.filter(space => space.width > 0.1 && space.height > 0.1);
     newSpaces.push(...validSpaces);
+
+    // Sort spaces to prioritize bottom-left positioning for next placement
+    newSpaces.sort((a, b) => {
+      if (Math.abs(a.y - b.y) > 1) return a.y - b.y;
+      if (Math.abs(a.x - b.x) > 1) return a.x - b.x;
+      return (b.width * b.height) - (a.width * a.height); // Larger spaces first if same position
+    });
 
     return newSpaces;
   }
@@ -486,45 +588,86 @@ export class MultiSheetOptimizer {
       inventoryUtilization: 0
     };
 
-    // Process each available sheet
-    for (const stock of stockInventory) {
-      if (results.unplacedParts.length === 0) break;
-      if (stock.remainingQuantity <= 0) continue;
+    // Calculate total available sheets at the start for strategic distribution
+    const totalAvailableSheets = stockInventory.reduce((sum, stock) => sum + stock.originalQuantity, 0);
 
-      // Find compatible parts for this sheet
-      const compatibleParts = results.unplacedParts.filter(part => {
-        const grainResult = ConstraintProcessor.checkGrainCompatibility(part, stock);
-        return grainResult.compatible && 
-               ConstraintProcessor.validateSpaceConstraints(part, stock, grainResult);
-      });
+    // Process each available sheet - loop until no more parts or no more sheets
+    let sheetsProcessed = 0;
+    const maxSheets = totalAvailableSheets;
+    
+    while (results.unplacedParts.length > 0 && sheetsProcessed < maxSheets) {
+      let sheetUsedThisRound = false;
+      
+      // Try each stock type that has remaining quantity
+      for (const stock of stockInventory) {
+        if (results.unplacedParts.length === 0) break;
+        if (stock.remainingQuantity <= 0) continue;
 
-      if (compatibleParts.length > 0) {
-        const sheetResult = this.optimizeSheetLayout(compatibleParts, stock, kerfThickness);
-        
-        if (sheetResult.placements.length > 0) {
-          // Create sheet usage record
-          const sheetUsage: StockUsage = {
-            stockIndex: stock.stockIndex,
-            sheetId: `Sheet-${results.usedSheets.length + 1}`,
-            placements: sheetResult.placements,
-            freeSpaces: sheetResult.freeSpaces,
-            usedArea: sheetResult.usedArea,
-            wasteArea: (stock.length * stock.width) - sheetResult.usedArea
-          };
+        console.log(`[MULTI-SHEET] Processing stock ${stock.stockIndex}, ${results.unplacedParts.length} parts remaining, remaining quantity: ${stock.remainingQuantity}`);
 
-          results.usedSheets.push(sheetUsage);
+        // Find compatible parts for this sheet
+        const compatibleParts = results.unplacedParts.filter(part => {
+          const grainResult = ConstraintProcessor.checkGrainCompatibility(part, stock);
+          const spaceValid = ConstraintProcessor.validateSpaceConstraints(part, stock, grainResult);
+          
+          return grainResult.compatible && spaceValid;
+        });
 
-          // Update remaining stock
-          stock.remainingQuantity--;
+        console.log(`[MULTI-SHEET] Found ${compatibleParts.length} compatible parts for this sheet`);
 
-          // Remove placed parts from unplaced list (for expanded parts, remove individual instances)
-          sheetResult.placedPartIndices.forEach(partIndex => {
-            const placedPartIndex = results.unplacedParts.findIndex(p => p.partIndex === partIndex);
-            if (placedPartIndex >= 0) {
-              results.unplacedParts.splice(placedPartIndex, 1); // Remove the specific instance
-            }
-          });
+        if (compatibleParts.length > 0) {
+          // MULTI-SHEET DISTRIBUTION FIX: Strategic part distribution instead of greedy placement
+          // Limit parts per sheet to encourage distribution across multiple sheets
+          const strategicParts = this.calculateStrategicPartDistribution(
+            compatibleParts, 
+            stock, 
+            results.unplacedParts.length,
+            totalAvailableSheets
+          );
+
+          console.log(`[MULTI-SHEET] Strategic distribution selected ${strategicParts.length} of ${compatibleParts.length} parts for optimal multi-sheet layout`);
+
+          const sheetResult = this.optimizeSheetLayout(strategicParts, stock, kerfThickness);
+          
+          if (sheetResult.placements.length > 0) {
+            // Create sheet usage record
+            const sheetUsage: StockUsage = {
+              stockIndex: stock.stockIndex,
+              sheetId: `Sheet-${results.usedSheets.length + 1}`,
+              placements: sheetResult.placements,
+              freeSpaces: sheetResult.freeSpaces,
+              usedArea: sheetResult.usedArea,
+              wasteArea: (stock.length * stock.width) - sheetResult.usedArea
+            };
+
+            results.usedSheets.push(sheetUsage);
+
+            // Update remaining stock
+            stock.remainingQuantity--;
+            sheetUsedThisRound = true;
+            sheetsProcessed++;
+
+            // Remove placed parts from unplaced list (for expanded parts, remove individual instances)
+            sheetResult.placedPartInstances.forEach(instanceId => {
+              const placedPartIndex = results.unplacedParts.findIndex(p => 
+                (p.instanceId && p.instanceId === instanceId) || 
+                (!p.instanceId && instanceId.startsWith(`${p.partIndex}-`))
+              );
+              if (placedPartIndex >= 0) {
+                results.unplacedParts.splice(placedPartIndex, 1); // Remove the specific instance
+              }
+            });
+            
+            // Break out of stock loop to try next iteration with remaining parts
+            break;
+          }
         }
+      }
+      
+      // If no sheet was used this round, break to avoid infinite loop
+      if (!sheetUsedThisRound) {
+        console.log(`[MULTI-SHEET] No compatible sheets found for remaining ${results.unplacedParts.length} parts`);
+        break;
       }
     }
 
@@ -546,7 +689,7 @@ export class MultiSheetOptimizer {
     placements: Placement[];
     freeSpaces: FreeSpace[];
     usedArea: number;
-    placedPartIndices: number[];
+    placedPartInstances: string[];
   } {
     const placements: Placement[] = [];
     let freeSpaces: FreeSpace[] = [{
@@ -556,7 +699,7 @@ export class MultiSheetOptimizer {
       height: stock.width
     }];
     let usedArea = 0;
-    const placedPartIndices: number[] = [];
+    const placedPartInstances: string[] = [];
 
     // Sort parts by priority (largest area first, then by complexity)
     const sortedParts = [...compatibleParts].sort((a, b) => {
@@ -570,21 +713,29 @@ export class MultiSheetOptimizer {
     for (const part of sortedParts) {
       if (part.quantity <= 0) continue;
 
+      console.log(`[SHEET-LAYOUT] Attempting to place part ${part.instanceId || part.partIndex} (${part.length}x${part.width})`);
+      console.log(`[SHEET-LAYOUT] Current free spaces: ${freeSpaces.length}`);
+      freeSpaces.forEach((space, i) => {
+        console.log(`  Space ${i}: (${space.x}, ${space.y}) ${space.width}x${space.height}`);
+      });
+
       const grainResult = ConstraintProcessor.checkGrainCompatibility(part, stock);
       const optimalPlacement = PlacementEngine.findOptimalPlacement(
         part, stock, placements, freeSpaces, kerfThickness, grainResult, compatibleParts
       );
 
       if (optimalPlacement) {
+        console.log(`[SHEET-LAYOUT] ✅ Placed part ${part.instanceId || part.partIndex} at (${optimalPlacement.placement.x}, ${optimalPlacement.placement.y})`);
+        
         // Add placement with unique ID using instanceId if available
-        const uniqueId = part.instanceId || `${part.partIndex}-${placements.filter(p => p.partId.startsWith(`Part-${part.partIndex}`)).length}`;
+        const uniqueId = part.instanceId || `${part.partIndex}-${placedPartInstances.length}`;
         const placementWithId = {
           ...optimalPlacement.placement,
           partId: `Part-${uniqueId}`
         };
 
         placements.push(placementWithId);
-        placedPartIndices.push(part.partIndex);
+        placedPartInstances.push(part.instanceId || `${part.partIndex}-${placedPartInstances.length}`);
         
         // Update free spaces
         freeSpaces = PlacementEngine.updateFreeSpaces(
@@ -596,10 +747,14 @@ export class MultiSheetOptimizer {
         );
 
         usedArea += grainResult.dimensions.length * grainResult.dimensions.width;
+        
+        console.log(`[SHEET-LAYOUT] Updated free spaces: ${freeSpaces.length}`);
+      } else {
+        console.log(`[SHEET-LAYOUT] ❌ Could not place part ${part.instanceId || part.partIndex} (${part.length}x${part.width})`);
       }
     }
 
-    return { placements, freeSpaces, usedArea, placedPartIndices };
+    return { placements, freeSpaces, usedArea, placedPartInstances };
   }
 
   /**
@@ -626,6 +781,84 @@ export class MultiSheetOptimizer {
     const sheetsUsed = usedSheets.length;
 
     return (sheetsUsed / totalAvailableSheets) * 100;
+  }
+
+  /**
+   * Calculate strategic part distribution to avoid greedy single-sheet placement
+   * Ensures better distribution across multiple sheets for practical cutting
+   */
+  private static calculateStrategicPartDistribution(
+    compatibleParts: ProcessedPart[],
+    stock: OptimizedStock,
+    totalRemainingParts: number,
+    availableSheetsCount: number
+  ): ProcessedPart[] {
+    
+    const sheetArea = stock.length * stock.width;
+    const totalPartArea = compatibleParts.reduce((sum, part) => sum + (part.length * part.width), 0);
+    const theoreticalEfficiency = totalPartArea / sheetArea;
+    
+    console.log(`[STRATEGIC] Analysis: efficiency=${(theoreticalEfficiency * 100).toFixed(1)}%, sheets=${availableSheetsCount}, remaining=${totalRemainingParts}, compatible=${compatibleParts.length}`);
+    
+    // If only one sheet available, use all compatible parts
+    if (availableSheetsCount <= 1) {
+      console.log(`[STRATEGIC] Only 1 sheet available, using all ${compatibleParts.length} parts`);
+      return compatibleParts;
+    }
+
+    // STRATEGIC DISTRIBUTION LOGIC:
+    // Only trigger when ALL parts could realistically fit on ONE sheet with high efficiency
+    // This prevents forcing distribution when parts naturally need multiple sheets
+    
+    const optimalSheetsNeeded = Math.ceil(totalPartArea / (sheetArea * 0.85)); // 85% target efficiency
+    const wouldFitOnOneSheet = totalPartArea <= (sheetArea * 0.90); // Could achieve 90%+ on single sheet
+    
+    console.log(`[STRATEGIC] Optimal sheets needed: ${optimalSheetsNeeded}, would fit on one sheet: ${wouldFitOnOneSheet}`);
+    
+    // Only apply strategic distribution if:
+    // 1. Parts would achieve very high efficiency (>90%) on a single sheet, AND
+    // 2. We have multiple sheets available, AND  
+    // 3. We have a reasonable number of parts to distribute
+    if (wouldFitOnOneSheet && theoreticalEfficiency > 0.90 && availableSheetsCount > 1 && totalRemainingParts > 8) {
+      console.log(`[STRATEGIC] High single-sheet efficiency detected (${(theoreticalEfficiency * 100).toFixed(1)}%), limiting parts for better distribution`);
+      
+      // Target ~65% efficiency per sheet for better practical distribution  
+      const targetEfficiency = 0.65;
+      const targetArea = sheetArea * targetEfficiency;
+      
+      console.log(`[STRATEGIC] Target area: ${targetArea.toLocaleString()}mm² (${(targetEfficiency * 100).toFixed(1)}% of ${sheetArea.toLocaleString()}mm²)`);
+      
+      // Select parts up to target area, prioritizing larger parts first
+      const sortedParts = [...compatibleParts].sort((a, b) => {
+        const areaA = a.length * a.width;
+        const areaB = b.length * b.width;
+        return areaB - areaA; // Largest first
+      });
+      
+      const selectedParts: ProcessedPart[] = [];
+      let accumulatedArea = 0;
+      
+      for (const part of sortedParts) {
+        const partArea = part.length * part.width;
+        console.log(`[STRATEGIC] Considering part ${part.instanceId || part.partIndex} (${part.length}x${part.width}=${partArea.toLocaleString()}mm²), current total: ${accumulatedArea.toLocaleString()}mm²`);
+        
+        if (accumulatedArea + partArea <= targetArea || selectedParts.length === 0) {
+          selectedParts.push(part);
+          accumulatedArea += partArea;
+          console.log(`[STRATEGIC] ✓ Added part, new total: ${accumulatedArea.toLocaleString()}mm²`);
+        } else {
+          console.log(`[STRATEGIC] ✗ Part would exceed target, stopping selection`);
+          break; // Stop when target area would be exceeded
+        }
+      }
+      
+      console.log(`[STRATEGIC] Selected ${selectedParts.length} parts (${(accumulatedArea / sheetArea * 100).toFixed(1)}% efficiency) instead of ${compatibleParts.length} parts`);
+      return selectedParts;
+    }
+    
+    console.log(`[STRATEGIC] No strategic distribution needed (naturally needs ${optimalSheetsNeeded} sheets), using all ${compatibleParts.length} parts`);
+    // For normal cases or when strategic distribution isn't needed, use all compatible parts
+    return compatibleParts;
   }
 }
 
