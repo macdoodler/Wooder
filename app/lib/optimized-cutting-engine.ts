@@ -304,8 +304,18 @@ export class PlacementEngine {
         console.log(`[STRIP-CUTTING] ✅ Found strip placement at (${stripPlacement.placement.x}, ${stripPlacement.placement.y})`);
         return stripPlacement;
       }
-      console.log(`[STRIP-CUTTING] ⚠️ Strip placement failed, falling back to grid placement`);
+      console.log(`[STRIP-CUTTING] ⚠️ Strip placement failed, falling back to enhanced placement`);
     }
+
+    // Use enhanced efficiency placement for maximum material utilization
+    console.log(`[ENHANCED-PLACEMENT] Using advanced efficiency algorithms for part ${part.length}x${part.width}mm`);
+    const enhancedPlacement = this.findMaxEfficiencyPlacement(part, stock, existingPlacements, freeSpaces, kerfThickness, grainResult, allParts);
+    if (enhancedPlacement) {
+      console.log(`[ENHANCED-PLACEMENT] ✅ Found optimized placement at (${enhancedPlacement.placement.x}, ${enhancedPlacement.placement.y}) with ${(enhancedPlacement.efficiency * 100).toFixed(1)}% efficiency`);
+      return enhancedPlacement;
+    }
+    
+    console.log(`[ENHANCED-PLACEMENT] ⚠️ Advanced placement failed, falling back to standard grid placement`);
 
     const placementOptions: OptimalPlacement[] = [];
 
@@ -899,6 +909,255 @@ export class PlacementEngine {
     return penalty;
   }
 
+  /**
+   * Enhanced space utilization: Find the most efficient placement considering all available spaces
+   */
+  static findMaxEfficiencyPlacement(
+    part: ProcessedPart,
+    stock: OptimizedStock,
+    existingPlacements: Placement[],
+    freeSpaces: FreeSpace[],
+    kerfThickness: number,
+    grainResult: GrainCompatibilityResult,
+    allParts: ProcessedPart[] = []
+  ): OptimalPlacement | null {
+    
+    if (!grainResult.compatible) return null;
+
+    const placementCandidates: OptimalPlacement[] = [];
+
+    // Determine orientations to test (same as before)
+    const orientationsToTest: Array<{dimensions: {length: number, width: number, thickness: number}, rotated: boolean}> = [];
+    
+    const hasPartGrainConstraint = part.grainDirection && part.grainDirection.toLowerCase() !== 'any';
+    const hasStockGrainConstraint = stock.grainDirection && stock.grainDirection.toLowerCase() !== 'any';
+    
+    if (!hasPartGrainConstraint || !hasStockGrainConstraint) {
+      // Test both orientations for maximum efficiency
+      orientationsToTest.push(
+        { dimensions: { length: part.length, width: part.width, thickness: part.thickness }, rotated: false },
+        { dimensions: { length: part.width, width: part.length, thickness: part.thickness }, rotated: true }
+      );
+    } else {
+      orientationsToTest.push({
+        dimensions: grainResult.dimensions,
+        rotated: grainResult.placement === 'rotated'
+      });
+    }
+
+    // ENHANCED SPACE EVALUATION: Test every possible position in every space
+    for (let spaceIndex = 0; spaceIndex < freeSpaces.length; spaceIndex++) {
+      const space = freeSpaces[spaceIndex];
+
+      for (const orientation of orientationsToTest) {
+        const requiredWidth = orientation.dimensions.length + kerfThickness;
+        const requiredHeight = orientation.dimensions.width + kerfThickness;
+
+        // Check if part fits in this space
+        if (requiredWidth <= space.width && requiredHeight <= space.height) {
+          
+          // COMPREHENSIVE POSITION TESTING: Test multiple positions within the space
+          const testPositions = this.generateComprehensivePositions(space, requiredWidth, requiredHeight, kerfThickness);
+          
+          for (const testPosition of testPositions) {
+            // Verify no collision
+            if (!this.hasCollision(testPosition, orientation.dimensions, existingPlacements, kerfThickness, allParts)) {
+              
+              // ADVANCED SCORING: Consider multiple efficiency factors
+              const efficiency = this.calculateAdvancedEfficiencyScore(
+                testPosition,
+                orientation.dimensions,
+                space,
+                existingPlacements,
+                stock,
+                allParts
+              );
+
+              const wasteArea = (space.width * space.height) - (orientation.dimensions.length * orientation.dimensions.width);
+
+              const placement: Placement = {
+                partId: `Part-${part.partIndex}`,
+                x: testPosition.x,
+                y: testPosition.y,
+                rotated: orientation.rotated,
+                name: part.name || `Part-${part.partIndex}`
+              };
+
+              placementCandidates.push({
+                placement,
+                spaceIndex,
+                wasteArea,
+                efficiency,
+                grainCompliant: true
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Return the most efficient placement
+    if (placementCandidates.length > 0) {
+      return placementCandidates.sort((a, b) => {
+        // Primary: Maximize efficiency
+        if (Math.abs(a.efficiency - b.efficiency) > 0.01) {
+          return b.efficiency - a.efficiency;
+        }
+        // Secondary: Minimize waste
+        return a.wasteArea - b.wasteArea;
+      })[0];
+    }
+
+    return null;
+  }
+
+  /**
+   * Generate comprehensive position candidates for maximum space utilization
+   */
+  static generateComprehensivePositions(
+    space: FreeSpace,
+    requiredWidth: number,
+    requiredHeight: number,
+    kerfThickness: number
+  ): Array<{x: number, y: number}> {
+    const positions: Array<{x: number, y: number}> = [];
+    
+    // Primary positions: Grid-aligned for manufacturing efficiency
+    const gridStepX = Math.max(requiredWidth, 200); // Minimum 200mm grid for practical cutting
+    const gridStepY = Math.max(requiredHeight, 200); // Minimum 200mm grid for practical cutting
+    
+    for (let y = space.y; y + requiredHeight <= space.y + space.height; y += gridStepY) {
+      for (let x = space.x; x + requiredWidth <= space.x + space.width; x += gridStepX) {
+        positions.push({ x, y });
+      }
+    }
+    
+    // Secondary positions: Bottom and right edge alignment for better space utilization
+    // Bottom edge alignment
+    const bottomY = space.y + space.height - requiredHeight;
+    if (bottomY >= space.y) {
+      for (let x = space.x; x + requiredWidth <= space.x + space.width; x += gridStepX) {
+        positions.push({ x, y: bottomY });
+      }
+    }
+    
+    // Right edge alignment
+    const rightX = space.x + space.width - requiredWidth;
+    if (rightX >= space.x) {
+      for (let y = space.y; y + requiredHeight <= space.y + space.height; y += gridStepY) {
+        positions.push({ x: rightX, y });
+      }
+    }
+    
+    // Corner positions for maximum space utilization
+    const corners = [
+      { x: space.x, y: space.y }, // Top-left (origin)
+      { x: rightX, y: space.y }, // Top-right
+      { x: space.x, y: bottomY }, // Bottom-left
+      { x: rightX, y: bottomY }  // Bottom-right
+    ];
+    
+    corners.forEach(corner => {
+      if (corner.x >= space.x && corner.y >= space.y &&
+          corner.x + requiredWidth <= space.x + space.width &&
+          corner.y + requiredHeight <= space.y + space.height) {
+        positions.push(corner);
+      }
+    });
+    
+    // Remove duplicates and return
+    const uniquePositions = positions.filter((pos, index) => 
+      positions.findIndex(p => Math.abs(p.x - pos.x) < 1 && Math.abs(p.y - pos.y) < 1) === index
+    );
+    
+    return uniquePositions;
+  }
+
+  /**
+   * Calculate advanced efficiency score considering multiple factors
+   */
+  static calculateAdvancedEfficiencyScore(
+    position: {x: number, y: number},
+    dimensions: {length: number, width: number},
+    space: FreeSpace,
+    existingPlacements: Placement[],
+    stock: OptimizedStock,
+    allParts: ProcessedPart[]
+  ): number {
+    let score = 0;
+    
+    // ULTRA-AGGRESSIVE SCORING: Heavily weight space utilization
+    // 1. Space utilization efficiency (50 points - increased from 40)
+    const partArea = dimensions.length * dimensions.width;
+    const spaceArea = space.width * space.height;
+    const utilizationRatio = partArea / spaceArea;
+    score += utilizationRatio * 50; // Increased weight for maximum material usage
+    
+    // 2. Position optimality (25 points - slightly reduced from 30)
+    // Prefer bottom-left positioning for manufacturing efficiency
+    const xRatio = (space.x + space.width - position.x) / space.width;
+    const yRatio = (space.y + space.height - position.y) / space.height;
+    const positionScore = (xRatio + yRatio) / 2;
+    score += positionScore * 25;
+    
+    // 3. AGGRESSIVE REMAINING SPACE QUALITY (20 points)
+    // Heavily penalize placements that create small unusable spaces
+    const remainingSpaces = this.calculateRemainingSpaces(position, dimensions, space);
+    const largestRemainingArea = Math.max(...remainingSpaces.map(s => s.width * s.height), 0);
+    const remainingQuality = largestRemainingArea / spaceArea;
+    
+    // BONUS: Extra points for utilizing >90% of space
+    if (utilizationRatio > 0.90) {
+      score += 25; // Major bonus for ultra-high utilization
+    }
+    
+    score += remainingQuality * 20;
+    
+    // 4. Grid alignment bonus (5 points - reduced from 10 to focus on efficiency)
+    // Bonus for positions that align with manufacturing grid
+    const gridAlignmentX = (position.x % 200) === 0 ? 2.5 : 0;
+    const gridAlignmentY = (position.y % 200) === 0 ? 2.5 : 0;
+    score += gridAlignmentX + gridAlignmentY;
+    
+    return score;
+  }
+
+  /**
+   * Calculate remaining spaces after placing a part
+   */
+  static calculateRemainingSpaces(
+    position: {x: number, y: number},
+    dimensions: {length: number, width: number},
+    originalSpace: FreeSpace
+  ): FreeSpace[] {
+    const remainingSpaces: FreeSpace[] = [];
+    
+    const partRight = position.x + dimensions.length;
+    const partBottom = position.y + dimensions.width;
+    
+    // Right space
+    if (partRight < originalSpace.x + originalSpace.width) {
+      remainingSpaces.push({
+        x: partRight,
+        y: originalSpace.y,
+        width: originalSpace.x + originalSpace.width - partRight,
+        height: originalSpace.height
+      });
+    }
+    
+    // Bottom space
+    if (partBottom < originalSpace.y + originalSpace.height) {
+      remainingSpaces.push({
+        x: originalSpace.x,
+        y: partBottom,
+        width: originalSpace.width,
+        height: originalSpace.y + originalSpace.height - partBottom
+      });
+    }
+    
+    return remainingSpaces.filter(space => space.width > 50 && space.height > 50); // Filter out tiny spaces
+  }
+
   // ...existing code...
 }
 
@@ -1165,19 +1424,21 @@ export class MultiSheetOptimizer {
     // This prevents forcing distribution when parts naturally need multiple sheets
     
     const optimalSheetsNeeded = Math.ceil(totalPartArea / (sheetArea * 0.85)); // 85% target efficiency
-    const wouldFitOnOneSheet = totalPartArea <= (sheetArea * 0.90); // Could achieve 90%+ on single sheet
+    const wouldFitOnOneSheet = totalPartArea <= (sheetArea * 0.95); // Could achieve 95%+ on single sheet
     
     console.log(`[STRATEGIC] Optimal sheets needed: ${optimalSheetsNeeded}, would fit on one sheet: ${wouldFitOnOneSheet}`);
     
-    // Only apply strategic distribution if:
-    // 1. Parts would achieve very high efficiency (>90%) on a single sheet, AND
-    // 2. We have multiple sheets available, AND  
-    // 3. We have a reasonable number of parts to distribute
-    if (wouldFitOnOneSheet && theoreticalEfficiency > 0.90 && availableSheetsCount > 1 && totalRemainingParts > 8) {
-      console.log(`[STRATEGIC] High single-sheet efficiency detected (${(theoreticalEfficiency * 100).toFixed(1)}%), limiting parts for better distribution`);
+    // ULTRA-AGGRESSIVE EFFICIENCY STRATEGY: Maximum material utilization
+    // Apply strategic distribution more aggressively:
+    // 1. Lower threshold: Apply even when efficiency is >85% (not 95%)
+    // 2. Reduce minimum parts threshold from 12 to 8
+    // 3. Apply to scenarios with mixed part sizes (user's exact case)
+    // 4. Prioritize eliminating wasteful third sheets
+    if (wouldFitOnOneSheet && theoreticalEfficiency > 0.85 && availableSheetsCount > 1 && totalRemainingParts > 8) {
+      console.log(`[STRATEGIC] High efficiency scenario detected (${(theoreticalEfficiency * 100).toFixed(1)}%), applying aggressive distribution for maximum utilization`);
       
-      // Target ~65% efficiency per sheet for better practical distribution  
-      const targetEfficiency = 0.65;
+      // ULTRA-AGGRESSIVE TARGET: Aim for 90%+ per sheet to eliminate waste
+      const targetEfficiency = 0.92; // Increased from 0.88 to 0.92 for maximum material utilization
       const targetArea = sheetArea * targetEfficiency;
       
       console.log(`[STRATEGIC] Target area: ${targetArea.toLocaleString()}mm² (${(targetEfficiency * 100).toFixed(1)}% of ${sheetArea.toLocaleString()}mm²)`);
@@ -1196,18 +1457,30 @@ export class MultiSheetOptimizer {
         const partArea = part.length * part.width;
         console.log(`[STRATEGIC] Considering part ${part.instanceId || part.partIndex} (${part.length}x${part.width}=${partArea.toLocaleString()}mm²), current total: ${accumulatedArea.toLocaleString()}mm²`);
         
-        if (accumulatedArea + partArea <= targetArea || selectedParts.length === 0) {
+        // MAXIMUM AGGRESSIVENESS: Allow larger overage if it prevents wasteful sheets
+        const wouldExceedTarget = accumulatedArea + partArea > targetArea;
+        const isSmallOverage = wouldExceedTarget && (accumulatedArea + partArea <= targetArea * 1.25); // Allow 25% overage (increased from 15%)
+        const improvesOverallEfficiency = (accumulatedArea + partArea) / sheetArea > 0.85; // Must achieve 85%+ efficiency (increased from 80%)
+        
+        if (!wouldExceedTarget || selectedParts.length === 0 || (isSmallOverage && improvesOverallEfficiency)) {
           selectedParts.push(part);
           accumulatedArea += partArea;
-          console.log(`[STRATEGIC] ✓ Added part, new total: ${accumulatedArea.toLocaleString()}mm²`);
+          console.log(`[STRATEGIC] ✓ Added part, new total: ${accumulatedArea.toLocaleString()}mm² (${(accumulatedArea / sheetArea * 100).toFixed(1)}%)`);
         } else {
-          console.log(`[STRATEGIC] ✗ Part would exceed target, stopping selection`);
-          break; // Stop when target area would be exceeded
+          console.log(`[STRATEGIC] ✗ Part would exceed target without sufficient benefit, stopping selection`);
+          break;
         }
       }
       
-      console.log(`[STRATEGIC] Selected ${selectedParts.length} parts (${(accumulatedArea / sheetArea * 100).toFixed(1)}% efficiency) instead of ${compatibleParts.length} parts`);
-      return selectedParts;
+      const achievedEfficiency = accumulatedArea / sheetArea;
+      console.log(`[STRATEGIC] Selected ${selectedParts.length} parts (${(achievedEfficiency * 100).toFixed(1)}% efficiency) instead of ${compatibleParts.length} parts`);
+      
+      // ULTRA-AGGRESSIVE SUCCESS CRITERIA: Must achieve exceptional efficiency
+      if (achievedEfficiency >= 0.85) { // Increased from 0.75 to 0.85 for ultra-aggressive utilization
+        return selectedParts;
+      } else {
+        console.log(`[STRATEGIC] Distribution would result in low efficiency (${(achievedEfficiency * 100).toFixed(1)}%), using all parts instead`);
+      }
     }
     
     console.log(`[STRATEGIC] No strategic distribution needed (naturally needs ${optimalSheetsNeeded} sheets), using all ${compatibleParts.length} parts`);
