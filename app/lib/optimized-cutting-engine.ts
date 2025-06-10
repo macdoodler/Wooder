@@ -296,6 +296,17 @@ export class PlacementEngine {
     
     if (!grainResult.compatible) return null;
 
+    // Check if this part should use strip-cutting optimization
+    if (this.shouldUseStripCutting(part, stock, existingPlacements, allParts)) {
+      console.log(`[STRIP-CUTTING] Using strip-cutting for small part ${part.length}x${part.width}mm`);
+      const stripPlacement = this.findStripPlacement(part, stock, existingPlacements, freeSpaces, kerfThickness, grainResult, allParts);
+      if (stripPlacement) {
+        console.log(`[STRIP-CUTTING] ✅ Found strip placement at (${stripPlacement.placement.x}, ${stripPlacement.placement.y})`);
+        return stripPlacement;
+      }
+      console.log(`[STRIP-CUTTING] ⚠️ Strip placement failed, falling back to grid placement`);
+    }
+
     const placementOptions: OptimalPlacement[] = [];
 
     // Determine orientations to test
@@ -546,6 +557,349 @@ export class PlacementEngine {
 
     return newSpaces;
   }
+
+  /**
+   * Detect if a part should use strip-cutting optimization
+   * Small parts benefit from continuous strip placement rather than grid alignment
+   */
+  static shouldUseStripCutting(
+    part: ProcessedPart,
+    stock: OptimizedStock,
+    existingPlacements: Placement[],
+    allParts: ProcessedPart[] = []
+  ): boolean {
+    const partArea = part.length * part.width;
+    const stockArea = stock.length * stock.width;
+    
+    // Consider strip-cutting for parts that are less than 15% of stock area (more aggressive threshold)
+    if (partArea > stockArea * 0.15) return false;
+    
+    // Check if there are significantly larger parts in the mix
+    const allPartAreas = allParts.map(p => p.length * p.width);
+    const maxPartArea = Math.max(...allPartAreas);
+    
+    // Use strip-cutting if this part is less than 60% of the largest part area (more aggressive)
+    return partArea < maxPartArea * 0.6;
+  }
+
+  /**
+   * Find optimal strip placement for small parts
+   * This method tries to place parts continuously in strips for better cutting efficiency
+   */
+  static findStripPlacement(
+    part: ProcessedPart,
+    stock: OptimizedStock,
+    existingPlacements: Placement[],
+    freeSpaces: FreeSpace[],
+    kerfThickness: number,
+    grainResult: GrainCompatibilityResult,
+    allParts: ProcessedPart[] = []
+  ): OptimalPlacement | null {
+    
+    const orientationsToTest: Array<{dimensions: {length: number, width: number, thickness: number}, rotated: boolean}> = [];
+    
+    // Check if we have actual grain constraints (not 'any')
+    const hasPartGrainConstraint = part.grainDirection && part.grainDirection.toLowerCase() !== 'any';
+    const hasStockGrainConstraint = stock.grainDirection && stock.grainDirection.toLowerCase() !== 'any';
+    
+    if (!hasPartGrainConstraint || !hasStockGrainConstraint) {
+      orientationsToTest.push(
+        { dimensions: { length: part.length, width: part.width, thickness: part.thickness }, rotated: false },
+        { dimensions: { length: part.width, width: part.length, thickness: part.thickness }, rotated: true }
+      );
+    } else {
+      orientationsToTest.push({
+        dimensions: grainResult.dimensions,
+        rotated: grainResult.placement === 'rotated'
+      });
+    }
+
+    let bestPlacement: OptimalPlacement | null = null;
+    let bestScore = -1;
+
+    // Prioritize spaces by bottom-most first (higher Y values) for small parts
+    const prioritizedSpaces = [...freeSpaces].sort((a, b) => {
+      // For small parts, prioritize larger areas and bottom-most positions
+      const areaA = a.width * a.height;
+      const areaB = b.width * b.height;
+      
+      // First, prioritize larger spaces
+      if (Math.abs(areaA - areaB) > 10000) {
+        return areaB - areaA;
+      }
+      
+      // Then prioritize bottom areas for strip cutting
+      return b.y - a.y;
+    });
+
+    for (const orientation of orientationsToTest) {
+      const requiredWidth = orientation.dimensions.length + kerfThickness;
+      const requiredHeight = orientation.dimensions.width + kerfThickness;
+
+      for (let spaceIndex = 0; spaceIndex < prioritizedSpaces.length; spaceIndex++) {
+        const space = prioritizedSpaces[spaceIndex];
+        const originalSpaceIndex = freeSpaces.indexOf(space);
+        
+        if (requiredWidth <= space.width && requiredHeight <= space.height) {
+          // Try strip placement: test multiple positions within the space
+          const positionsToTest = this.generateStripPositions(space, requiredWidth, requiredHeight, kerfThickness);
+          
+          for (const position of positionsToTest) {
+            if (!this.hasCollision(position, orientation.dimensions, existingPlacements, kerfThickness, allParts)) {
+              const score = this.calculateStripScore(position, space, orientation.dimensions, existingPlacements, kerfThickness);
+              
+              if (score > bestScore) {
+                bestScore = score;
+                bestPlacement = {
+                  placement: {
+                    partId: `Part-${part.partIndex}`,
+                    x: position.x,
+                    y: position.y,
+                    rotated: orientation.rotated,
+                    name: part.name || `Part-${part.partIndex}`
+                  },
+                  spaceIndex: originalSpaceIndex,
+                  wasteArea: (space.width * space.height) - (orientation.dimensions.length * orientation.dimensions.width),
+                  efficiency: score / 100,
+                  grainCompliant: true
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return bestPlacement;
+  }
+
+  /**
+   * Generate multiple position candidates within a space for strip-cutting optimization
+   */
+  static generateStripPositions(
+    space: FreeSpace,
+    requiredWidth: number,
+    requiredHeight: number,
+    kerfThickness: number
+  ): Array<{x: number, y: number}> {
+    const positions: Array<{x: number, y: number}> = [];
+    
+    // Always test space origin (standard grid placement)
+    positions.push({ x: space.x, y: space.y });
+    
+    // Generate a dense grid pattern for better space utilization
+    const gridSpacingX = requiredWidth;
+    const gridSpacingY = requiredHeight;
+    
+    // Fill the space systematically - row by row, column by column
+    for (let y = space.y; y + requiredHeight <= space.y + space.height; y += gridSpacingY) {
+      for (let x = space.x; x + requiredWidth <= space.x + space.width; x += gridSpacingX) {
+        positions.push({ x, y });
+      }
+    }
+    
+    // Test additional positions with slight offsets for edge cases
+    const offsetX = requiredWidth * 0.5;
+    const offsetY = requiredHeight * 0.5;
+    
+    if (space.x + offsetX + requiredWidth <= space.x + space.width &&
+        space.y + offsetY + requiredHeight <= space.y + space.height) {
+      positions.push({ x: space.x + offsetX, y: space.y + offsetY });
+    }
+    
+    return positions;
+  }
+
+  /**
+   * Calculate strip-cutting efficiency score
+   * Prioritizes continuous placement and efficient material usage
+   */
+  static calculateStripScore(
+    position: {x: number, y: number},
+    space: FreeSpace,
+    partDimensions: {length: number, width: number},
+    existingPlacements: Placement[],
+    kerfThickness: number
+  ): number {
+    let score = 0;
+    
+    // Base score for space utilization - heavily weighted
+    const spaceArea = space.width * space.height;
+    const partArea = partDimensions.length * partDimensions.width;
+    const utilization = partArea / spaceArea;
+    score += utilization * 40; // Base utilization score
+    
+    // MAJOR BONUS for utilizing bottom areas (high Y positions)
+    // This encourages using the bottom strip areas that are typically underutilized
+    const bottomBonus = this.calculateBottomAreaBonus(position, space);
+    score += bottomBonus;
+    
+    // Bonus for bottom-left positioning (better for cutting order)
+    const bottomLeftBonus = this.calculateBottomLeftBonus(position, space);
+    score += bottomLeftBonus;
+    
+    // Bonus for continuous placement (adjacent to existing parts)
+    const adjacencyBonus = this.calculateAdjacencyBonus(position, partDimensions, existingPlacements, kerfThickness);
+    score += adjacencyBonus;
+    
+    // Bonus for efficient strip cutting (aligned edges for easier cutting)
+    const alignmentBonus = this.calculateAlignmentBonus(position, partDimensions, existingPlacements);
+    score += alignmentBonus;
+    
+    // Reduced penalty for waste to allow more flexible placement
+    const wastePenalty = this.calculateWastePenalty(position, partDimensions, space) * 0.3;
+    score -= wastePenalty;
+    
+    return score;
+  }
+
+  /**
+   * Calculate major bonus for using bottom strip areas
+   */
+  static calculateBottomAreaBonus(
+    position: {x: number, y: number},
+    space: FreeSpace
+  ): number {
+    // Give massive bonus for Y positions greater than 600 (bottom areas)
+    if (position.y > 600) {
+      return 50; // Huge bonus for bottom area utilization
+    }
+    
+    // For top areas, give bonus based on space size to encourage utilization
+    const spaceArea = space.width * space.height;
+    if (spaceArea > 500000) { // Large spaces (like the unused top-right area)
+      return 30; // Significant bonus for utilizing large unused spaces
+    }
+    
+    // Moderate bonus for mid-level positions
+    if (position.y > 300) {
+      return 25;
+    }
+    
+    // Small bonus for any non-top positions
+    if (position.y > 150) {
+      return 10;
+    }
+    
+    return 5; // Small bonus even for top strip placement to encourage utilization
+  }
+
+  /**
+   * Calculate bonus for bottom-left positioning
+   */
+  static calculateBottomLeftBonus(
+    position: {x: number, y: number},
+    space: FreeSpace
+  ): number {
+    const xRatio = (space.x + space.width - position.x) / space.width; // Closer to left edge = higher
+    const yRatio = (space.y + space.height - position.y) / space.height; // Closer to bottom = higher
+    
+    return (xRatio + yRatio) * 10; // Up to 20 points for optimal positioning
+  }
+
+  /**
+   * Calculate bonus for parts placed adjacent to existing parts (for strip cutting)
+   */
+  static calculateAdjacencyBonus(
+    position: {x: number, y: number},
+    partDimensions: {length: number, width: number},
+    existingPlacements: Placement[],
+    kerfThickness: number
+  ): number {
+    let bonus = 0;
+    const tolerance = kerfThickness + 1; // Small tolerance for alignment detection
+    
+    const partRight = position.x + partDimensions.length;
+    const partBottom = position.y + partDimensions.width;
+    
+    for (const existing of existingPlacements) {
+      // Use actual part dimensions (assuming square-ish small parts for strip cutting)
+      const assumedPartSize = Math.max(partDimensions.length, partDimensions.width);
+      
+      // Check for horizontal adjacency (part placed to the right)
+      if (Math.abs(existing.x + assumedPartSize - position.x) <= tolerance && 
+          Math.abs(existing.y - position.y) <= tolerance) {
+        bonus += 25; // Good horizontal strip continuity
+      }
+      
+      // Check for vertical adjacency (part placed below)
+      if (Math.abs(existing.y + assumedPartSize - position.y) <= tolerance && 
+          Math.abs(existing.x - position.x) <= tolerance) {
+        bonus += 25; // Good vertical strip continuity
+      }
+      
+      // Additional bonus for forming perfect strips (multiple adjacent parts)
+      if (Math.abs(existing.x - position.x) <= tolerance || 
+          Math.abs(existing.y - position.y) <= tolerance) {
+        bonus += 8; // Bonus for alignment potential
+      }
+      
+      // Special bonus for tight packing (parts very close together)
+      const distance = Math.sqrt(
+        Math.pow(existing.x - position.x, 2) + 
+        Math.pow(existing.y - position.y, 2)
+      );
+      if (distance < assumedPartSize * 1.5) {
+        bonus += 5; // Small bonus for dense packing
+      }
+    }
+    
+    return Math.min(bonus, 40); // Increased cap for adjacency bonus
+  }
+
+  /**
+   * Calculate bonus for edge alignment (easier cutting)
+   */
+  static calculateAlignmentBonus(
+    position: {x: number, y: number},
+    partDimensions: {length: number, width: number},
+    existingPlacements: Placement[]
+  ): number {
+    let bonus = 0;
+    
+    // Bonus for aligning with existing cut lines
+    for (const existing of existingPlacements) {
+      // Vertical alignment (same X coordinate)
+      if (Math.abs(existing.x - position.x) < 1) {
+        bonus += 10;
+      }
+      
+      // Horizontal alignment (same Y coordinate)  
+      if (Math.abs(existing.y - position.y) < 1) {
+        bonus += 10;
+      }
+    }
+    
+    return Math.min(bonus, 20); // Cap alignment bonus
+  }
+
+  /**
+   * Calculate penalty for creating small unusable waste spaces
+   */
+  static calculateWastePenalty(
+    position: {x: number, y: number},
+    partDimensions: {length: number, width: number},
+    space: FreeSpace
+  ): number {
+    let penalty = 0;
+    
+    // Calculate remaining space dimensions
+    const rightSpace = (space.x + space.width) - (position.x + partDimensions.length);
+    const bottomSpace = (space.y + space.height) - (position.y + partDimensions.width);
+    
+    // Penalty for creating very small unusable spaces
+    if (rightSpace > 0 && rightSpace < 100) { // Less than 100mm width
+      penalty += (100 - rightSpace) * 0.1; // Increasing penalty as space gets smaller
+    }
+    
+    if (bottomSpace > 0 && bottomSpace < 100) { // Less than 100mm height
+      penalty += (100 - bottomSpace) * 0.1;
+    }
+    
+    return penalty;
+  }
+
+  // ...existing code...
 }
 
 /**
