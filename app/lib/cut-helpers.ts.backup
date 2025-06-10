@@ -1,0 +1,344 @@
+// Helper functions for cutting algorithm
+import { 
+  Stock, Part, FreeSpace, Placement, StockUsage, MaterialType 
+} from "./types";
+
+// Function to handle cutting of sheet materials (2D cutting)
+export const handleSheetMaterialCutting = (
+  part: Part,
+  stockUsage: StockUsage[],
+  remainingStocks: any[],
+  partIndex: number,
+  inputTotalUsedSheets: number,
+  availableStocks: Stock[],
+  kerfThickness: number,
+  findBestSpace: (part: Part, freeSpaces: FreeSpace[], strategy: 'best-fit' | 'first-fit') => { spaceIndex: number; rotated: boolean } | null,
+  splitFreeSpace: (space: FreeSpace, partWidth: number, partHeight: number, partX: number, partY: number) => FreeSpace[]
+): { placed: boolean; remainingQuantity: number; currentErrorMessage: string | null; totalUsedSheets: number } => {
+  let placed = false;
+  let remainingQuantity = part.quantity || 1; // Use the part's quantity instead of hardcoded 1
+  let currentErrorMessage: string | null = null;
+  let totalUsedSheets = inputTotalUsedSheets;
+
+  // Try to place in existing used sheets first
+  for (const usage of stockUsage) {
+    const stockDefinitionForUsage = availableStocks[usage.stockIndex];
+    
+    // Skip if not sheet material
+    if (stockDefinitionForUsage.materialType !== MaterialType.Sheet) {
+      continue;
+    }
+    
+    // Check material compatibility for existing sheets
+    if (part.material && stockDefinitionForUsage.material && 
+        part.material.toLowerCase() !== stockDefinitionForUsage.material.toLowerCase()) {
+      continue; // Skip this sheet if materials don't match
+    }
+    
+    // Check thickness compatibility
+    if (part.thickness > stockDefinitionForUsage.thickness) {
+      continue; // Skip if part is thicker than stock
+    }
+
+    // Continue trying to place parts until we run out of remainingQuantity or can't place more on this sheet
+    let canPlaceMoreOnThisSheet = true;
+    while (remainingQuantity > 0 && canPlaceMoreOnThisSheet) {
+      const freeSpaces = usage.freeSpaces;
+      const bestSpace = findBestSpace(part, freeSpaces, 'best-fit');
+      
+      if (bestSpace) {
+        const { spaceIndex, rotated } = bestSpace;
+        const space = freeSpaces[spaceIndex];
+        
+        usage.placements.push({
+          partId: `Part-${partIndex}`,
+          x: space.x,
+          y: space.y,
+          rotated
+        });
+        usage.usedArea += part.length * part.width;
+        
+        const newSpaces = splitFreeSpace(
+          space,
+          rotated ? part.width : part.length,
+          rotated ? part.length : part.width,
+          space.x,
+          space.y
+        );
+        // Replace the used space with new resulting spaces
+        freeSpaces.splice(spaceIndex, 1, ...newSpaces);
+        
+        placed = true;
+        remainingQuantity--;
+      } else {
+        // Can't place more parts on this sheet
+        canPlaceMoreOnThisSheet = false;
+      }
+    }
+    
+    // If we've placed all parts, break out of the loop
+    if (remainingQuantity === 0) {
+      break;
+    }
+  }
+  
+  // If we still have remaining quantity, try to use new sheets
+  while (remainingQuantity > 0 && !currentErrorMessage) {
+    let stockToUseFromRemainingIndex = -1;
+
+    // Find a suitable stock: material match first, then any compatible if part has no material preference
+    const suitableStockIndex = remainingStocks.findIndex(s => 
+      s.originalQuantity > 0 && // Use originalQuantity for this calculation session
+      part.thickness <= s.thickness &&
+      ((part.length <= s.length && part.width <= s.width) || 
+       (part.width <= s.length && part.length <= s.width)) &&
+      (part.material ? s.material?.toLowerCase() === part.material.toLowerCase() : true) &&
+      s.materialType === MaterialType.Sheet // Only use sheet materials
+    );
+
+    if (suitableStockIndex !== -1) {
+      stockToUseFromRemainingIndex = suitableStockIndex;
+    } else if (part.material) { 
+      // Fallback: if part has material but no exact match, try any stock that fits (ignoring material)
+      const fallbackStockIndex = remainingStocks.findIndex(s => 
+        s.originalQuantity > 0 && 
+        part.thickness <= s.thickness &&
+        ((part.length <= s.length && part.width <= s.width) || 
+         (part.width <= s.length && part.length <= s.width)) &&
+        s.materialType === MaterialType.Sheet // Only use sheet materials
+      );
+      
+      if (fallbackStockIndex !== -1) {
+        stockToUseFromRemainingIndex = fallbackStockIndex;
+        console.warn(`Using fallback stock for part ${partIndex} with material ${part.material}. Found stock without matching material.`);
+      }
+    }
+
+    if (stockToUseFromRemainingIndex !== -1) {
+      const stockToUse = remainingStocks[stockToUseFromRemainingIndex];
+      
+      // Only proceed if we have available quantity of this stock
+      if (stockToUse.originalQuantity > 0) {
+        stockToUse.originalQuantity--; // Decrement for this calculation session
+        totalUsedSheets++;
+        
+        const newSheetId = `Sheet-${stockUsage.length + 1}`;
+        const originalStockIndex = stockToUse.stockIndex; 
+        const stockDefinition = availableStocks[originalStockIndex]; 
+        
+        const initialFreeSpaces: FreeSpace[] = [{
+          x: 0, y: 0, width: stockDefinition.length, height: stockDefinition.width
+        }];
+        
+        // Create a new usage object for this sheet
+        const newUsage: StockUsage = {
+          sheetId: newSheetId,
+          stockIndex: originalStockIndex,
+          placements: [],
+          usedArea: 0,
+          wasteArea: 0, // Will be calculated later
+          freeSpaces: initialFreeSpaces
+        };
+        
+        // Add new sheet to stock usage
+        stockUsage.push(newUsage);
+        
+        // Try to place as many parts as possible on this new sheet
+        let canPlaceMoreOnThisSheet = true;
+        while (remainingQuantity > 0 && canPlaceMoreOnThisSheet) {
+          const bestSpaceOnNewSheet = findBestSpace(part, newUsage.freeSpaces, 'best-fit');
+          
+          if (bestSpaceOnNewSheet) {
+            const { spaceIndex, rotated } = bestSpaceOnNewSheet;
+            const space = newUsage.freeSpaces[spaceIndex];
+            
+            // Add placement
+            newUsage.placements.push({
+              partId: `Part-${partIndex}`,
+              x: space.x,
+              y: space.y,
+              rotated
+            });
+            
+            // Update used area
+            newUsage.usedArea += part.length * part.width;
+            
+            // Update free spaces
+            const newSpaces = splitFreeSpace(
+              space,
+              rotated ? part.width : part.length,
+              rotated ? part.length : part.width,
+              space.x,
+              space.y
+            );
+            
+            // Replace the used space with new resulting spaces
+            newUsage.freeSpaces.splice(spaceIndex, 1, ...newSpaces);
+            
+            placed = true;
+            remainingQuantity--;
+          } else {
+            // Can't place more parts on this new sheet
+            canPlaceMoreOnThisSheet = false;
+          }
+        }
+      } else {
+        // No quantity available for this stock type
+        currentErrorMessage = `Not enough quantity of sheet material (${stockToUse.length}x${stockToUse.width}x${stockToUse.thickness}mm${stockToUse.material ? ', '+stockToUse.material : ''}) available.`;
+      }
+    } else {
+      // No suitable stock found, even new ones
+      currentErrorMessage = `Not enough suitable sheet material to fit part ${partIndex} (${part.length}x${part.width}x${part.thickness}mm, Material: ${part.material || 'Any'}).`;
+    }
+  }
+  
+  return { placed, remainingQuantity, currentErrorMessage, totalUsedSheets };
+};
+
+// Function to handle cutting of dimensional lumber (1D cutting - only length matters)
+export const handleDimensionalLumberCutting = (
+  part: Part,
+  stockUsage: StockUsage[],
+  remainingStocks: any[],
+  partIndex: number,
+  inputTotalUsedSheets: number,
+  availableStocks: Stock[],
+  kerfThickness: number
+): { placed: boolean; remainingQuantity: number; currentErrorMessage: string | null; totalUsedSheets: number } => {
+  let placed = false;
+  let remainingQuantity = part.quantity || 1; // Use the part's quantity instead of hardcoded 1
+  let currentErrorMessage: string | null = null;
+  let totalUsedSheets = inputTotalUsedSheets;
+
+  // For dimensional lumber, we only care about length
+  // Check if we can use any remaining length from already used stock
+  // Try to place as many parts as possible on each existing piece of lumber
+  for (const usage of stockUsage) {
+    const stockDefinitionForUsage = availableStocks[usage.stockIndex];
+    
+    // Skip if not dimensional lumber or material doesn't match
+    if (stockDefinitionForUsage.materialType !== MaterialType.Dimensional) {
+      continue;
+    }
+    
+    // Check material compatibility
+    if (part.material && stockDefinitionForUsage.material && 
+        part.material.toLowerCase() !== stockDefinitionForUsage.material.toLowerCase()) {
+      continue; 
+    }
+    
+    // Check width and thickness compatibility for dimensional lumber
+    if (part.width > stockDefinitionForUsage.width || part.thickness > stockDefinitionForUsage.thickness) {
+      continue;
+    }
+    
+    // Continue placing parts on this lumber piece as long as we have space and parts left
+    while (remainingQuantity > 0) {
+      // Find remaining length in this piece of lumber
+      // For dimensional lumber, we use the x-coordinate to track used length
+      const usedLength = usage.placements.length > 0 ? 
+        Math.max(...usage.placements.map(p => p.x + (
+          // Get the actual part length from the part reference
+          (() => {
+            const placementPartIndex = parseInt(p.partId.split('-')[1]);
+            // Use requiredParts instead of availableStocks to get the correct part length
+            return requiredParts[placementPartIndex]?.length || part.length;
+          })()
+        ))) : 
+        0;
+      const totalLength = stockDefinitionForUsage.length;
+      const remainingLength = totalLength - usedLength;
+      
+      // Check if we can fit this part in the remaining length
+      if (remainingLength >= part.length + kerfThickness) {
+        // Add placement at the end of the used length
+        usage.placements.push({
+          partId: `Part-${partIndex}`,
+          x: usedLength + kerfThickness, // Add kerf thickness for the cut
+          y: 0, // For dimensional lumber, y is always 0
+          rotated: false // No rotation for dimensional lumber
+        });
+        
+        // Update used area
+        usage.usedArea += part.length * part.width;
+        
+        placed = true;
+        remainingQuantity--;
+      } else {
+        // No more space on this lumber piece
+        break;
+      }
+    }
+    
+    // If we've placed all parts, we can stop
+    if (remainingQuantity === 0) {
+      break;
+    }
+  }
+  
+  // While there are remaining parts to place, try to use new lumber pieces
+  while (remainingQuantity > 0 && !currentErrorMessage) {
+    // Find a suitable stock piece
+    const suitableStockIndex = remainingStocks.findIndex(s => 
+      s.originalQuantity > 0 && 
+      s.materialType === MaterialType.Dimensional &&
+      part.width <= s.width &&
+      part.thickness <= s.thickness &&
+      part.length <= s.length &&
+      (part.material ? s.material?.toLowerCase() === part.material.toLowerCase() : true)
+    );
+    
+    if (suitableStockIndex !== -1) {
+      const stockToUse = remainingStocks[suitableStockIndex];
+      
+      // Only proceed if we have available quantity
+      if (stockToUse.originalQuantity > 0) {
+        stockToUse.originalQuantity--;
+        totalUsedSheets++; // We count each piece of lumber as one "sheet" for tracking
+        
+        const newLumberId = `Lumber-${stockUsage.length + 1}`;
+        const originalStockIndex = stockToUse.stockIndex;
+        const stockDefinition = availableStocks[originalStockIndex];
+        
+        // Calculate how many parts can fit on this lumber piece
+        const numPartsPerLumber = Math.floor((stockDefinition.length + kerfThickness) / (part.length + kerfThickness));
+        const numPartsToPlace = Math.min(numPartsPerLumber, remainingQuantity);
+        
+        // For dimensional lumber, place parts sequentially
+        const newUsage: StockUsage = {
+          sheetId: newLumberId,
+          stockIndex: originalStockIndex,
+          placements: [],
+          usedArea: 0,
+          wasteArea: 0, // Will be calculated later
+          freeSpaces: [] // We don't track free spaces for dimensional lumber
+        };
+        
+        // Add placements for all parts that fit on this lumber
+        for (let i = 0; i < numPartsToPlace; i++) {
+          const currentPosition = i * (part.length + kerfThickness);
+          
+          newUsage.placements.push({
+            partId: `Part-${partIndex}`,
+            x: currentPosition,
+            y: 0, // For dimensional lumber, y is always 0
+            rotated: false // No rotation for dimensional lumber
+          });
+          
+          newUsage.usedArea += part.length * part.width;
+          remainingQuantity--;
+        }
+        
+        stockUsage.push(newUsage);
+        placed = true;
+      } else {
+        currentErrorMessage = `Not enough quantity of dimensional lumber (${stockToUse.length}x${stockToUse.width}x${stockToUse.thickness}mm${stockToUse.material ? ', '+stockToUse.material : ''}) available.`;
+      }
+    } else {
+      currentErrorMessage = `Not enough suitable dimensional lumber to fit part ${partIndex} (${part.length}x${part.width}x${part.thickness}mm, Material: ${part.material || 'Any'}).`;
+      break;
+    }
+  }
+  
+  return { placed, remainingQuantity, currentErrorMessage, totalUsedSheets };
+};

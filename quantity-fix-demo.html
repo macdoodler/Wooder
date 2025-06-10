@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantity Fix Verification - Live Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-section {
+            background: #f5f5f5;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        .results {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .success {
+            border-color: #4CAF50;
+            background-color: #f8fff8;
+        }
+        .error {
+            border-color: #f44336;
+            background-color: #fff8f8;
+        }
+        button {
+            background: #007cba;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #005a87;
+        }
+        .placement-list {
+            background: #f9f9f9;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Quantity Fix Verification - Live Test</h1>
+    <p>This page tests that the cutting optimization can now handle multiple quantities correctly. 
+       Before the fix, only one of each part type would be placed regardless of quantity.</p>
+
+    <div class="test-section">
+        <h2>Test 1: Basic Quantity Test</h2>
+        <p><strong>Setup:</strong> 3x "Cabinet Door" + 2x "Shelf" = 5 total parts</p>
+        <p><strong>Expected:</strong> All 5 parts should be placed with unique IDs</p>
+        <button onclick="runBasicQuantityTest()">Run Basic Test</button>
+        <div id="basicResult" class="results" style="display: none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 2: Large Quantity Test</h2>
+        <p><strong>Setup:</strong> 8x small parts on a large sheet</p>
+        <p><strong>Expected:</strong> All 8 parts should be placed</p>
+        <button onclick="runLargeQuantityTest()">Run Large Quantity Test</button>
+        <div id="largeResult" class="results" style="display: none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 3: Mixed Quantities Test</h2>
+        <p><strong>Setup:</strong> 4x large + 6x medium + 10x small parts</p>
+        <p><strong>Expected:</strong> As many parts as can fit should be placed</p>
+        <button onclick="runMixedQuantityTest()">Run Mixed Test</button>
+        <div id="mixedResult" class="results" style="display: none;"></div>
+    </div>
+
+    <script type="module">
+        async function runBasicQuantityTest() {
+            const resultDiv = document.getElementById('basicResult');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '🔄 Running test...';
+            
+            try {
+                const { calculateOptimalCuts } = await import('./app/lib/calculateOptimalCuts.js');
+                const { MaterialType } = await import('./app/lib/types.js');
+                
+                const stocks = [{
+                    id: "test-stock",
+                    length: 1200,
+                    width: 800,
+                    thickness: 18,
+                    quantity: 2,
+                    material: "Plywood",
+                    materialType: MaterialType.Sheet,
+                    grainDirection: "horizontal"
+                }];
+                
+                const parts = [
+                    {
+                        name: "Cabinet Door",
+                        length: 300,
+                        width: 200,
+                        thickness: 18,
+                        quantity: 3,
+                        material: "Plywood",
+                        materialType: MaterialType.Sheet,
+                        grainDirection: "horizontal"
+                    },
+                    {
+                        name: "Shelf",
+                        length: 250,
+                        width: 150,
+                        thickness: 18,
+                        quantity: 2,
+                        material: "Plywood",
+                        materialType: MaterialType.Sheet,
+                        grainDirection: "horizontal"
+                    }
+                ];
+                
+                const result = calculateOptimalCuts(stocks, parts, 3.2);
+                
+                const totalPlacements = result.stockUsage.reduce((sum, usage) => sum + usage.placements.length, 0);
+                const expectedTotal = parts.reduce((sum, p) => sum + p.quantity, 0);
+                
+                let html = `<h3>📊 Results</h3>`;
+                html += `<p><strong>Success:</strong> ${result.success ? '✅' : '❌'}</p>`;
+                html += `<p><strong>Expected parts:</strong> ${expectedTotal}</p>`;
+                html += `<p><strong>Placed parts:</strong> ${totalPlacements}</p>`;
+                html += `<p><strong>Quantity handling:</strong> ${totalPlacements === expectedTotal ? '✅ CORRECT' : '❌ INCORRECT'}</p>`;
+                
+                if (result.stockUsage.length > 0) {
+                    html += `<div class="placement-list"><h4>Placement Details:</h4>`;
+                    result.stockUsage.forEach((usage, index) => {
+                        html += `<p><strong>Sheet ${index + 1}:</strong></p><ul>`;
+                        usage.placements.forEach(placement => {
+                            html += `<li>${placement.partId} at (${placement.x}, ${placement.y}) ${placement.rotated ? '(rotated)' : ''}</li>`;
+                        });
+                        html += `</ul>`;
+                    });
+                    html += `</div>`;
+                }
+                
+                resultDiv.className = `results ${totalPlacements === expectedTotal ? 'success' : 'error'}`;
+                resultDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultDiv.className = 'results error';
+                resultDiv.innerHTML = `<h3>❌ Error</h3><p>${error.message}</p>`;
+            }
+        }
+        
+        async function runLargeQuantityTest() {
+            const resultDiv = document.getElementById('largeResult');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '🔄 Running test...';
+            
+            try {
+                const { calculateOptimalCuts } = await import('./app/lib/calculateOptimalCuts.js');
+                const { MaterialType } = await import('./app/lib/types.js');
+                
+                const stocks = [{
+                    id: "large-stock",
+                    length: 2400,
+                    width: 1200,
+                    thickness: 18,
+                    quantity: 1,
+                    material: "Plywood",
+                    materialType: MaterialType.Sheet,
+                    grainDirection: "horizontal"
+                }];
+                
+                const parts = [{
+                    name: "Small Part",
+                    length: 200,
+                    width: 150,
+                    thickness: 18,
+                    quantity: 8,
+                    material: "Plywood",
+                    materialType: MaterialType.Sheet,
+                    grainDirection: "horizontal"
+                }];
+                
+                const result = calculateOptimalCuts(stocks, parts, 3.2);
+                
+                const totalPlacements = result.stockUsage.reduce((sum, usage) => sum + usage.placements.length, 0);
+                const expectedTotal = parts.reduce((sum, p) => sum + p.quantity, 0);
+                
+                let html = `<h3>📊 Results</h3>`;
+                html += `<p><strong>Success:</strong> ${result.success ? '✅' : '❌'}</p>`;
+                html += `<p><strong>Expected parts:</strong> ${expectedTotal}</p>`;
+                html += `<p><strong>Placed parts:</strong> ${totalPlacements}</p>`;
+                html += `<p><strong>Quantity handling:</strong> ${totalPlacements === expectedTotal ? '✅ PERFECT' : totalPlacements > 1 ? '✅ WORKING' : '❌ BROKEN'}</p>`;
+                
+                if (result.stockUsage.length > 0) {
+                    html += `<div class="placement-list"><h4>Part IDs Generated:</h4><ul>`;
+                    const allPartIds = [];
+                    result.stockUsage.forEach(usage => {
+                        usage.placements.forEach(placement => {
+                            allPartIds.push(placement.partId);
+                        });
+                    });
+                    allPartIds.forEach(id => {
+                        html += `<li>${id}</li>`;
+                    });
+                    html += `</ul>`;
+                    
+                    const uniqueIds = new Set(allPartIds);
+                    html += `<p><strong>Unique IDs:</strong> ${uniqueIds.size}/${allPartIds.length} ${uniqueIds.size === allPartIds.length ? '✅' : '❌'}</p>`;
+                    html += `</div>`;
+                }
+                
+                resultDiv.className = `results ${totalPlacements >= expectedTotal * 0.8 ? 'success' : 'error'}`;
+                resultDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultDiv.className = 'results error';
+                resultDiv.innerHTML = `<h3>❌ Error</h3><p>${error.message}</p>`;
+            }
+        }
+        
+        async function runMixedQuantityTest() {
+            const resultDiv = document.getElementById('mixedResult');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '🔄 Running test...';
+            
+            try {
+                const { calculateOptimalCuts } = await import('./app/lib/calculateOptimalCuts.js');
+                const { MaterialType } = await import('./app/lib/types.js');
+                
+                const stocks = [{
+                    id: "mixed-stock",
+                    length: 2400,
+                    width: 1200,
+                    thickness: 18,
+                    quantity: 2,
+                    material: "Plywood",
+                    materialType: MaterialType.Sheet,
+                    grainDirection: "horizontal"
+                }];
+                
+                const parts = [
+                    {
+                        name: "Large Part",
+                        length: 600,
+                        width: 400,
+                        thickness: 18,
+                        quantity: 4,
+                        material: "Plywood",
+                        materialType: MaterialType.Sheet,
+                        grainDirection: "horizontal"
+                    },
+                    {
+                        name: "Medium Part",
+                        length: 300,
+                        width: 250,
+                        thickness: 18,
+                        quantity: 6,
+                        material: "Plywood",
+                        materialType: MaterialType.Sheet,
+                        grainDirection: "horizontal"
+                    },
+                    {
+                        name: "Small Part",
+                        length: 150,
+                        width: 100,
+                        thickness: 18,
+                        quantity: 10,
+                        material: "Plywood",
+                        materialType: MaterialType.Sheet,
+                        grainDirection: "horizontal"
+                    }
+                ];
+                
+                const result = calculateOptimalCuts(stocks, parts, 3.2);
+                
+                const totalPlacements = result.stockUsage.reduce((sum, usage) => sum + usage.placements.length, 0);
+                const expectedTotal = parts.reduce((sum, p) => sum + p.quantity, 0);
+                
+                let html = `<h3>📊 Results</h3>`;
+                html += `<p><strong>Success:</strong> ${result.success ? '✅' : '❌'}</p>`;
+                html += `<p><strong>Expected parts:</strong> ${expectedTotal}</p>`;
+                html += `<p><strong>Placed parts:</strong> ${totalPlacements}</p>`;
+                html += `<p><strong>Efficiency:</strong> ${((totalPlacements / expectedTotal) * 100).toFixed(1)}%</p>`;
+                
+                if (result.stockUsage.length > 0) {
+                    html += `<div class="placement-list"><h4>Placement Summary:</h4>`;
+                    result.stockUsage.forEach((usage, index) => {
+                        html += `<p><strong>Sheet ${index + 1}:</strong> ${usage.placements.length} parts</p>`;
+                    });
+                    
+                    // Count by part type
+                    const partTypeCounts = {};
+                    result.stockUsage.forEach(usage => {
+                        usage.placements.forEach(placement => {
+                            const partType = placement.partId.split('-')[1]; // Extract part index
+                            partTypeCounts[partType] = (partTypeCounts[partType] || 0) + 1;
+                        });
+                    });
+                    
+                    html += `<h4>Parts by Type:</h4><ul>`;
+                    parts.forEach((part, index) => {
+                        const placed = partTypeCounts[index] || 0;
+                        html += `<li>${part.name}: ${placed}/${part.quantity} placed</li>`;
+                    });
+                    html += `</ul></div>`;
+                }
+                
+                resultDiv.className = `results ${totalPlacements > 10 ? 'success' : 'error'}`;
+                resultDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultDiv.className = 'results error';
+                resultDiv.innerHTML = `<h3>❌ Error</h3><p>${error.message}</p>`;
+            }
+        }
+        
+        // Make functions available globally
+        window.runBasicQuantityTest = runBasicQuantityTest;
+        window.runLargeQuantityTest = runLargeQuantityTest;
+        window.runMixedQuantityTest = runMixedQuantityTest;
+    </script>
+</body>
+</html>
