@@ -206,3 +206,34 @@ jsconfig.json.bak
 # Keep essential library files
 !app/lib/**/*.ts
 !app/lib/**/*.js
+
+# ===== PREVENT ACCUMULATION OF TEMPORARY FILES =====
+# Debugging and test files in root
+test-*.js
+test-*.mjs
+test-*.cjs
+test-*.ts
+test-*.html
+debug-*.js
+debug-*.ts
+demo-*.js
+demo-*.ts
+analyze-*.js
+quantity-*.js
+verify-*.sh
+verify-*.mjs
+
+# Backup and temporary files
+*.backup
+*.broken
+*.fixed
+*.new
+*.tmp
+
+# Temporary documentation
+*-COMPLETE.md
+*-complete.md
+MISSION-*.md
+
+# Build artifacts in wrong locations
+/build/

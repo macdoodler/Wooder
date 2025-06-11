@@ -42,26 +42,36 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 The project includes comprehensive test suites:
 
 ```bash
-# Run all tests
-npx jest
+# Run specific test modules for development
+# Note: Tests are TypeScript files that can be run with ts-node
 
-# Run specific test suites
-npx jest app/tests/quantity-fix-verification.test.ts
-npx jest app/tests/grain-direction-enhancement.test.ts
+npx ts-node app/tests/calculateOptimalCuts.test.ts
+npx ts-node app/tests/grain-direction-enforcement.test.ts
+npx ts-node app/tests/multi-sheet-distribution-issue.test.ts
 ```
 
 ## 📁 Project Structure
 
 ```
-app/
-├── lib/                    # Core algorithms and utilities
-│   ├── optimized-cutting-engine.ts    # Main 5-phase optimization engine
-│   ├── calculateOptimalCuts.ts        # Primary calculation function
-│   ├── cutSequenceOptimizer.ts        # Cut sequence generation
-│   └── types.ts                       # TypeScript type definitions
-├── api/                    # API routes for data persistence
-├── warehouse/              # Inventory management pages
-└── tests/                  # Comprehensive test suites
+wooder/
+├── app/
+│   ├── lib/                           # Core cutting optimization library
+│   │   ├── optimized-cutting-engine.ts    # Main 5-phase optimization engine
+│   │   ├── calculateOptimalCuts.ts        # Primary calculation function
+│   │   ├── cutSequenceOptimizer.ts        # Cut sequence generation
+│   │   ├── types.ts                       # TypeScript type definitions
+│   │   ├── algorithm-integration.ts       # Algorithm coordination
+│   │   ├── unified-packing-engine.ts      # Advanced packing algorithms
+│   │   └── [6 more core files]
+│   ├── api/                           # REST API routes
+│   │   ├── calculations/              # Cutting calculations endpoint
+│   │   └── warehouse/                 # Inventory management endpoint
+│   ├── warehouse/                     # Inventory management UI
+│   ├── tests/                         # Essential test suite (12 core tests)
+│   └── [pages & components]
+├── db/                                # Database schema
+├── public/                            # Static assets
+└── [config files]                    # Next.js, TypeScript, Tailwind configs
 ```
 
 ## 🔧 Recent Improvements
