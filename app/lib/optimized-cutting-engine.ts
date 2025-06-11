@@ -3,6 +3,66 @@
 
 import { Stock, Part, Placement, FreeSpace, Results, StockUsage, MaterialType } from './types';
 
+// ===== PERFORMANCE OPTIMIZATION: DEBUG LOGGING SYSTEM =====
+
+/**
+ * Debug logging utility to prevent performance issues from verbose console output
+ * Only logs when specific debug flags are enabled
+ */
+class DebugLogger {
+  static logSharedCuts(message: string): void {
+    if (typeof window !== 'undefined' && (window as any).DEBUG_SHARED_CUTS) {
+      console.log(message);
+    }
+  }
+
+  static logKerfAware(message: string): void {
+    if (typeof window !== 'undefined' && (window as any).DEBUG_KERF_AWARE) {
+      console.log(message);
+    }
+  }
+
+  static logCollision(message: string): void {
+    if (typeof window !== 'undefined' && (window as any).DEBUG_COLLISION) {
+      console.log(message);
+    }
+  }
+
+  static logPlacement(message: string): void {
+    if (typeof window !== 'undefined' && (window as any).DEBUG_PLACEMENT) {
+      console.log(message);
+    }
+  }
+
+  static logMultiSheet(message: string): void {
+    if (typeof window !== 'undefined' && (window as any).DEBUG_MULTI_SHEET) {
+      console.log(message);
+    }
+  }
+
+  // Enable all debug flags for comprehensive debugging
+  static enableVerboseDebugging(): void {
+    if (typeof window !== 'undefined') {
+      (window as any).DEBUG_SHARED_CUTS = true;
+      (window as any).DEBUG_KERF_AWARE = true;
+      (window as any).DEBUG_COLLISION = true;
+      (window as any).DEBUG_PLACEMENT = true;
+      (window as any).DEBUG_MULTI_SHEET = true;
+    }
+  }
+
+  // Disable all debug flags for production performance
+  static disableVerboseDebugging(): void {
+    if (typeof window !== 'undefined') {
+      (window as any).DEBUG_SHARED_CUTS = false;
+      (window as any).DEBUG_KERF_AWARE = false;
+      (window as any).DEBUG_COLLISION = false;
+      (window as any).DEBUG_PLACEMENT = false;
+      (window as any).DEBUG_MULTI_SHEET = false;
+    }
+  }
+}
+
 // ===== PHASE 1: INPUT PROCESSING AND VALIDATION =====
 
 export interface OptimizedStock extends Stock {
@@ -281,6 +341,127 @@ export class ConstraintProcessor {
  */
 export class PlacementEngine {
 
+  // PERFORMANCE OPTIMIZATION: Spatial grid for fast collision detection
+  private static spatialGrid: SpatialGrid | null = null;
+  private static readonly CELL_SIZE = 200; // 200mm cells for spatial indexing
+
+  /**
+   * Initialize spatial grid for fast collision detection
+   */
+  private static initializeSpatialGrid(existingPlacements: Placement[], allParts: ProcessedPart[], stock: OptimizedStock): void {
+    this.spatialGrid = {
+      cellSize: this.CELL_SIZE,
+      grid: new Map(),
+      bounds: { minX: 0, minY: 0, maxX: stock.length, maxY: stock.width }
+    };
+
+    // Add existing placements to spatial grid
+    existingPlacements.forEach(placement => {
+      this.addToSpatialGrid(placement, allParts);
+    });
+  }
+
+  /**
+   * Add placement to spatial grid
+   */
+  private static addToSpatialGrid(placement: Placement, allParts: ProcessedPart[]): void {
+    if (!this.spatialGrid) return;
+
+    // Get part dimensions
+    const partIdMatch = placement.partId.match(/Part-(\d+)/);
+    const partIndex = partIdMatch ? parseInt(partIdMatch[1]) : -1;
+    const part = allParts.find(p => p.partIndex === partIndex);
+    
+    if (!part) return;
+
+    const width = placement.rotated ? part.width : part.length;
+    const height = placement.rotated ? part.length : part.width;
+
+    // Calculate grid cells this placement occupies
+    const minCellX = Math.floor(placement.x / this.CELL_SIZE);
+    const maxCellX = Math.floor((placement.x + width) / this.CELL_SIZE);
+    const minCellY = Math.floor(placement.y / this.CELL_SIZE);
+    const maxCellY = Math.floor((placement.y + height) / this.CELL_SIZE);
+
+    // Add to all relevant cells
+    for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+      for (let cellY = minCellY; cellY <= maxCellY; cellY++) {
+        const cellKey = `${cellX},${cellY}`;
+        if (!this.spatialGrid.grid.has(cellKey)) {
+          this.spatialGrid.grid.set(cellKey, []);
+        }
+        this.spatialGrid.grid.get(cellKey)!.push(placement);
+      }
+    }
+  }
+
+  /**
+   * Fast collision detection using spatial indexing
+   */
+  private static fastCollisionCheck(
+    newPosition: { x: number; y: number },
+    newDimensions: { length: number; width: number },
+    kerfThickness: number,
+    allParts: ProcessedPart[]
+  ): boolean {
+    if (!this.spatialGrid) return false;
+
+    const newLeft = newPosition.x;
+    const newRight = newPosition.x + newDimensions.length + kerfThickness;
+    const newTop = newPosition.y;
+    const newBottom = newPosition.y + newDimensions.width + kerfThickness;
+
+    // Calculate which grid cells to check
+    const minCellX = Math.floor(newLeft / this.CELL_SIZE);
+    const maxCellX = Math.floor(newRight / this.CELL_SIZE);
+    const minCellY = Math.floor(newTop / this.CELL_SIZE);
+    const maxCellY = Math.floor(newBottom / this.CELL_SIZE);
+
+    const TOLERANCE = 0.01;
+    const checkedPlacements = new Set<string>();
+
+    // Check only relevant cells
+    for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+      for (let cellY = minCellY; cellY <= maxCellY; cellY++) {
+        const cellKey = `${cellX},${cellY}`;
+        const cellPlacements = this.spatialGrid.grid.get(cellKey);
+        
+        if (!cellPlacements) continue;
+
+        for (const existing of cellPlacements) {
+          // Avoid checking same placement multiple times
+          if (checkedPlacements.has(existing.partId)) continue;
+          checkedPlacements.add(existing.partId);
+
+          // Get existing part dimensions
+          const partIdMatch = existing.partId.match(/Part-(\d+)/);
+          const partIndex = partIdMatch ? parseInt(partIdMatch[1]) : -1;
+          const part = allParts.find(p => p.partIndex === partIndex);
+          
+          if (!part) continue;
+
+          const existingWidth = existing.rotated ? part.width : part.length;
+          const existingHeight = existing.rotated ? part.length : part.width;
+
+          const existingLeft = existing.x;
+          const existingRight = existing.x + existingWidth + kerfThickness;
+          const existingTop = existing.y;
+          const existingBottom = existing.y + existingHeight + kerfThickness;
+
+          // Check rectangle overlap with tolerance
+          const xOverlap = !(newRight <= existingLeft + TOLERANCE || newLeft >= existingRight - TOLERANCE);
+          const yOverlap = !(newBottom <= existingTop + TOLERANCE || newTop >= existingBottom - TOLERANCE);
+
+          if (xOverlap && yOverlap) {
+            return true; // Collision detected
+          }
+        }
+      }
+    }
+
+    return false; // No collision
+  }
+
   /**
    * Find optimal placement with collision detection
    */
@@ -296,26 +477,39 @@ export class PlacementEngine {
     
     if (!grainResult.compatible) return null;
 
+    // OPTIMIZATION: Initialize spatial grid for large placement counts
+    if (existingPlacements.length > 10 && allParts.length > 0) {
+      this.initializeSpatialGrid(existingPlacements, allParts, stock);
+    }
+
     // Check if this part should use strip-cutting optimization
     if (this.shouldUseStripCutting(part, stock, existingPlacements, allParts)) {
-      console.log(`[STRIP-CUTTING] Using strip-cutting for small part ${part.length}x${part.width}mm`);
+      DebugLogger.logPlacement(`[STRIP-CUTTING] Using strip-cutting for small part ${part.length}x${part.width}mm`);
       const stripPlacement = this.findStripPlacement(part, stock, existingPlacements, freeSpaces, kerfThickness, grainResult, allParts);
       if (stripPlacement) {
-        console.log(`[STRIP-CUTTING] ✅ Found strip placement at (${stripPlacement.placement.x}, ${stripPlacement.placement.y})`);
+        // Update spatial grid with new placement
+        if (this.spatialGrid && allParts.length > 0) {
+          this.addToSpatialGrid(stripPlacement.placement, allParts);
+        }
+        DebugLogger.logPlacement(`[STRIP-CUTTING] ✅ Found strip placement at (${stripPlacement.placement.x}, ${stripPlacement.placement.y})`);
         return stripPlacement;
       }
-      console.log(`[STRIP-CUTTING] ⚠️ Strip placement failed, falling back to enhanced placement`);
+      DebugLogger.logPlacement(`[STRIP-CUTTING] ⚠️ Strip placement failed, falling back to enhanced placement`);
     }
 
     // Use enhanced efficiency placement for maximum material utilization
-    console.log(`[ENHANCED-PLACEMENT] Using advanced efficiency algorithms for part ${part.length}x${part.width}mm`);
+    DebugLogger.logPlacement(`[ENHANCED-PLACEMENT] Using advanced efficiency algorithms for part ${part.length}x${part.width}mm`);
     const enhancedPlacement = this.findMaxEfficiencyPlacement(part, stock, existingPlacements, freeSpaces, kerfThickness, grainResult, allParts);
     if (enhancedPlacement) {
-      console.log(`[ENHANCED-PLACEMENT] ✅ Found optimized placement at (${enhancedPlacement.placement.x}, ${enhancedPlacement.placement.y}) with ${(enhancedPlacement.efficiency * 100).toFixed(1)}% efficiency`);
+      // Update spatial grid with new placement
+      if (this.spatialGrid && allParts.length > 0) {
+        this.addToSpatialGrid(enhancedPlacement.placement, allParts);
+      }
+      DebugLogger.logPlacement(`[ENHANCED-PLACEMENT] ✅ Found optimized placement at (${enhancedPlacement.placement.x}, ${enhancedPlacement.placement.y}) with ${(enhancedPlacement.efficiency * 100).toFixed(1)}% efficiency`);
       return enhancedPlacement;
     }
     
-    console.log(`[ENHANCED-PLACEMENT] ⚠️ Advanced placement failed, falling back to standard grid placement`);
+    DebugLogger.logPlacement(`[ENHANCED-PLACEMENT] ⚠️ Advanced placement failed, falling back to standard grid placement`);
 
     const placementOptions: OptimalPlacement[] = [];
 
@@ -431,7 +625,7 @@ export class PlacementEngine {
   }
 
   /**
-   * Universal collision detection with proper part dimension lookup
+   * OPTIMIZED: Universal collision detection with spatial indexing and early termination
    */
   static hasCollision(
     newPosition: { x: number; y: number },
@@ -440,44 +634,64 @@ export class PlacementEngine {
     kerfThickness: number,
     allParts: ProcessedPart[] = []
   ): boolean {
+    // OPTIMIZATION: Use spatial grid if available for fast lookup
+    if (this.spatialGrid && allParts.length > 0) {
+      return this.fastCollisionCheck(newPosition, newDimensions, kerfThickness, allParts);
+    }
+
+    // FALLBACK: Original collision detection for small placement counts
+    const kerfAware = this.calculateKerfAwareSpacing(
+      newPosition, 
+      newDimensions, 
+      existingPlacements, 
+      kerfThickness, 
+      allParts
+    );
+
     const newLeft = newPosition.x;
-    const newRight = newPosition.x + newDimensions.length + kerfThickness;
+    const newRight = newPosition.x + kerfAware.effectiveWidth;
     const newTop = newPosition.y;
-    const newBottom = newPosition.y + newDimensions.width + kerfThickness;
+    const newBottom = newPosition.y + kerfAware.effectiveHeight;
 
-    // CRITICAL FIX: Add floating point tolerance to prevent precision errors
-    const TOLERANCE = 0.01; // 0.01mm tolerance for floating point precision
+    const TOLERANCE = 0.01;
 
-    return existingPlacements.some(existing => {
-      // Extract part index from partId (format: "Part-X-Y")
+    // OPTIMIZATION: Early termination on first collision
+    for (const existing of existingPlacements) {
       const partIdMatch = existing.partId.match(/Part-(\d+)/);
       const partIndex = partIdMatch ? parseInt(partIdMatch[1]) : -1;
-      
-      // Find the part to get actual dimensions
       const part = allParts.find(p => p.partIndex === partIndex);
       
       let existingWidth, existingHeight;
       if (part) {
-        // Use actual part dimensions, accounting for rotation
         existingWidth = existing.rotated ? part.width : part.length;
         existingHeight = existing.rotated ? part.length : part.width;
       } else {
-        // Fallback - conservative collision detection
-        existingWidth = 200; // Conservative estimate
+        existingWidth = 200;
         existingHeight = 200;
       }
 
-      const existingLeft = existing.x;
-      const existingRight = existing.x + existingWidth + kerfThickness;
-      const existingTop = existing.y;
-      const existingBottom = existing.y + existingHeight + kerfThickness;
+      const existingKerfAware = this.calculateKerfAwareSpacing(
+        { x: existing.x, y: existing.y },
+        { length: existingWidth, width: existingHeight },
+        existingPlacements.filter(p => p !== existing),
+        kerfThickness,
+        allParts
+      );
 
-      // Check rectangle overlap with floating point tolerance
+      const existingLeft = existing.x;
+      const existingRight = existing.x + existingKerfAware.effectiveWidth;
+      const existingTop = existing.y;
+      const existingBottom = existing.y + existingKerfAware.effectiveHeight;
+
       const xOverlap = !(newRight <= existingLeft + TOLERANCE || newLeft >= existingRight - TOLERANCE);
       const yOverlap = !(newBottom <= existingTop + TOLERANCE || newTop >= existingBottom - TOLERANCE);
 
-      return xOverlap && yOverlap;
-    });
+      if (xOverlap && yOverlap) {
+        return true; // EARLY TERMINATION: Return immediately on first collision
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -652,7 +866,7 @@ export class PlacementEngine {
         
         if (requiredWidth <= space.width && requiredHeight <= space.height) {
           // Try strip placement: test multiple positions within the space
-          const positionsToTest = this.generateStripPositions(space, requiredWidth, requiredHeight, kerfThickness);
+          const positionsToTest = this.generateStripPositions(space, requiredWidth, requiredHeight, kerfThickness, 4); // PERFORMANCE: Limit to 4 strip positions
           
           for (const position of positionsToTest) {
             if (!this.hasCollision(position, orientation.dimensions, existingPlacements, kerfThickness, allParts)) {
@@ -684,40 +898,52 @@ export class PlacementEngine {
   }
 
   /**
-   * Generate multiple position candidates within a space for strip-cutting optimization
+   * OPTIMIZED: Generate smart strip positions with reduced iteration
    */
   static generateStripPositions(
     space: FreeSpace,
     requiredWidth: number,
     requiredHeight: number,
-    kerfThickness: number
+    kerfThickness: number,
+    maxPositions: number = 6 // PERFORMANCE: Limit strip positions
   ): Array<{x: number, y: number}> {
     const positions: Array<{x: number, y: number}> = [];
     
-    // Always test space origin (standard grid placement)
+    // PRIORITY 1: Space origin (most common placement)
     positions.push({ x: space.x, y: space.y });
     
-    // Generate a dense grid pattern for better space utilization
-    const gridSpacingX = requiredWidth;
-    const gridSpacingY = requiredHeight;
+    // PRIORITY 2: Strategic strip positions for small parts
+    const spaceArea = space.width * space.height;
+    const partArea = requiredWidth * requiredHeight;
     
-    // Fill the space systematically - row by row, column by column
-    for (let y = space.y; y + requiredHeight <= space.y + space.height; y += gridSpacingY) {
-      for (let x = space.x; x + requiredWidth <= space.x + space.width; x += gridSpacingX) {
-        positions.push({ x, y });
+    // Only generate additional positions for larger spaces relative to part size
+    if (spaceArea > partArea * 4 && positions.length < maxPositions) {
+      // Bottom edge for strip cutting
+      const bottomY = space.y + space.height - requiredHeight;
+      if (bottomY > space.y) {
+        positions.push({ x: space.x, y: bottomY });
+      }
+      
+      // Right edge alignment
+      const rightX = space.x + space.width - requiredWidth;
+      if (rightX > space.x) {
+        positions.push({ x: rightX, y: space.y });
+      }
+      
+      // Center position for larger spaces
+      if (spaceArea > partArea * 8 && positions.length < maxPositions) {
+        const centerX = space.x + (space.width - requiredWidth) / 2;
+        const centerY = space.y + (space.height - requiredHeight) / 2;
+        
+        if (centerX >= space.x && centerY >= space.y &&
+            centerX + requiredWidth <= space.x + space.width &&
+            centerY + requiredHeight <= space.y + space.height) {
+          positions.push({ x: centerX, y: centerY });
+        }
       }
     }
     
-    // Test additional positions with slight offsets for edge cases
-    const offsetX = requiredWidth * 0.5;
-    const offsetY = requiredHeight * 0.5;
-    
-    if (space.x + offsetX + requiredWidth <= space.x + space.width &&
-        space.y + offsetY + requiredHeight <= space.y + space.height) {
-      positions.push({ x: space.x + offsetX, y: space.y + offsetY });
-    }
-    
-    return positions;
+    return positions.slice(0, maxPositions);
   }
 
   /**
@@ -817,7 +1043,7 @@ export class PlacementEngine {
     kerfThickness: number
   ): number {
     let bonus = 0;
-    const tolerance = kerfThickness + 1; // Small tolerance for alignment detection
+    const tolerance = kerfThickness + 1; // Small tolerance for alignment
     
     const partRight = position.x + partDimensions.length;
     const partBottom = position.y + partDimensions.width;
@@ -957,7 +1183,7 @@ export class PlacementEngine {
         if (requiredWidth <= space.width && requiredHeight <= space.height) {
           
           // COMPREHENSIVE POSITION TESTING: Test multiple positions within the space
-          const testPositions = this.generateComprehensivePositions(space, requiredWidth, requiredHeight, kerfThickness);
+          const testPositions = this.generateComprehensivePositions(space, requiredWidth, requiredHeight, kerfThickness, 6); // PERFORMANCE: Limit to 6 positions
           
           for (const testPosition of testPositions) {
             // Verify no collision
@@ -1012,65 +1238,64 @@ export class PlacementEngine {
   }
 
   /**
-   * Generate comprehensive position candidates for maximum space utilization
+   * OPTIMIZED: Generate smart position candidates with early termination
    */
   static generateComprehensivePositions(
     space: FreeSpace,
     requiredWidth: number,
     requiredHeight: number,
-    kerfThickness: number
+    kerfThickness: number,
+    maxPositions: number = 8 // PERFORMANCE: Limit max positions tested
   ): Array<{x: number, y: number}> {
     const positions: Array<{x: number, y: number}> = [];
     
-    // Primary positions: Grid-aligned for manufacturing efficiency
-    const gridStepX = Math.max(requiredWidth, 200); // Minimum 200mm grid for practical cutting
-    const gridStepY = Math.max(requiredHeight, 200); // Minimum 200mm grid for practical cutting
-    
-    for (let y = space.y; y + requiredHeight <= space.y + space.height; y += gridStepY) {
-      for (let x = space.x; x + requiredWidth <= space.x + space.width; x += gridStepX) {
-        positions.push({ x, y });
-      }
-    }
-    
-    // Secondary positions: Bottom and right edge alignment for better space utilization
-    // Bottom edge alignment
+    // PRIORITY 1: Essential positions (corners and edges)
     const bottomY = space.y + space.height - requiredHeight;
-    if (bottomY >= space.y) {
-      for (let x = space.x; x + requiredWidth <= space.x + space.width; x += gridStepX) {
-        positions.push({ x, y: bottomY });
-      }
-    }
-    
-    // Right edge alignment
     const rightX = space.x + space.width - requiredWidth;
-    if (rightX >= space.x) {
-      for (let y = space.y; y + requiredHeight <= space.y + space.height; y += gridStepY) {
-        positions.push({ x: rightX, y });
-      }
-    }
     
-    // Corner positions for maximum space utilization
-    const corners = [
-      { x: space.x, y: space.y }, // Top-left (origin)
+    const essentialPositions = [
+      { x: space.x, y: space.y }, // Top-left (origin) - HIGHEST PRIORITY
       { x: rightX, y: space.y }, // Top-right
       { x: space.x, y: bottomY }, // Bottom-left
       { x: rightX, y: bottomY }  // Bottom-right
     ];
     
-    corners.forEach(corner => {
-      if (corner.x >= space.x && corner.y >= space.y &&
-          corner.x + requiredWidth <= space.x + space.width &&
-          corner.y + requiredHeight <= space.y + space.height) {
-        positions.push(corner);
+    essentialPositions.forEach(pos => {
+      if (pos.x >= space.x && pos.y >= space.y &&
+          pos.x + requiredWidth <= space.x + space.width &&
+          pos.y + requiredHeight <= space.y + space.height) {
+        positions.push(pos);
       }
     });
     
-    // Remove duplicates and return
+    // EARLY TERMINATION: If we have good essential positions, limit additional testing
+    if (positions.length >= 2 && maxPositions <= 6) {
+      return positions.slice(0, maxPositions);
+    }
+    
+    // PRIORITY 2: Strategic grid positions (only if space warrants it)
+    const spaceArea = space.width * space.height;
+    const partArea = requiredWidth * requiredHeight;
+    const spaceUtilization = partArea / spaceArea;
+    
+    // Only generate grid positions for large spaces or low utilization
+    if (spaceUtilization < 0.7 && positions.length < maxPositions) {
+      const gridStepX = Math.max(requiredWidth * 2, 400); // Larger grid steps
+      const gridStepY = Math.max(requiredHeight * 2, 400);
+      
+      for (let y = space.y + gridStepY; y + requiredHeight <= space.y + space.height && positions.length < maxPositions; y += gridStepY) {
+        for (let x = space.x + gridStepX; x + requiredWidth <= space.x + space.width && positions.length < maxPositions; x += gridStepX) {
+          positions.push({ x, y });
+        }
+      }
+    }
+    
+    // Remove duplicates and limit to maxPositions
     const uniquePositions = positions.filter((pos, index) => 
       positions.findIndex(p => Math.abs(p.x - pos.x) < 1 && Math.abs(p.y - pos.y) < 1) === index
     );
     
-    return uniquePositions;
+    return uniquePositions.slice(0, maxPositions);
   }
 
   /**
@@ -1158,7 +1383,128 @@ export class PlacementEngine {
     return remainingSpaces.filter(space => space.width > 50 && space.height > 50); // Filter out tiny spaces
   }
 
-  // ...existing code...
+  /**
+   * SHARED CUT LINE OPTIMIZATION: Calculate potential shared boundaries between parts
+   * This reduces the number of required cuts and improves cutting efficiency
+   */
+  static detectSharedCutLines(
+    existingPlacements: Placement[],
+    newPlacement: { x: number, y: number, width: number, height: number },
+    kerfThickness: number,
+    allParts: ProcessedPart[] = []
+  ): {
+    sharedVertical: boolean;
+    sharedHorizontal: boolean;
+    kerfSavings: number;
+  } {
+    let sharedVertical = false;
+    let sharedHorizontal = false;
+    let kerfSavings = 0;
+
+    const newLeft = newPlacement.x;
+    const newRight = newPlacement.x + newPlacement.width;
+    const newTop = newPlacement.y;
+    const newBottom = newPlacement.y + newPlacement.height;
+
+    for (const existing of existingPlacements) {
+      // Get existing part dimensions
+      const partIdMatch = existing.partId.match(/Part-(\d+)/);
+      const partIndex = partIdMatch ? parseInt(partIdMatch[1]) : -1;
+      const part = allParts.find(p => p.partIndex === partIndex);
+      
+      let existingWidth, existingHeight;
+      if (part) {
+        existingWidth = existing.rotated ? part.width : part.length;
+        existingHeight = existing.rotated ? part.length : part.width;
+      } else {
+        existingWidth = 200; // Conservative estimate
+        existingHeight = 200;
+      }
+
+      const existingLeft = existing.x;
+      const existingRight = existing.x + existingWidth;
+      const existingTop = existing.y;
+      const existingBottom = existing.y + existingHeight;
+
+      // Check for shared vertical cut lines (same X coordinates)
+      const tolerance = kerfThickness * 0.5; // Allow some tolerance for alignment
+      
+      // Left edge alignment
+      if (Math.abs(newLeft - existingRight) <= tolerance) {
+        sharedVertical = true;
+        kerfSavings += Math.min(newPlacement.height, existingHeight) * kerfThickness;
+        DebugLogger.logSharedCuts(`[SHARED-CUT] Detected shared vertical cut at X=${newLeft} (left edge alignment)`);
+      }
+      
+      // Right edge alignment
+      if (Math.abs(newRight - existingLeft) <= tolerance) {
+        sharedVertical = true;
+        kerfSavings += Math.min(newPlacement.height, existingHeight) * kerfThickness;
+        DebugLogger.logSharedCuts(`[SHARED-CUT] Detected shared vertical cut at X=${newRight} (right edge alignment)`);
+      }
+
+      // Check for shared horizontal cut lines (same Y coordinates)
+      
+      // Top edge alignment
+      if (Math.abs(newTop - existingBottom) <= tolerance) {
+        sharedHorizontal = true;
+        kerfSavings += Math.min(newPlacement.width, existingWidth) * kerfThickness;
+        DebugLogger.logSharedCuts(`[SHARED-CUT] Detected shared horizontal cut at Y=${newTop} (top edge alignment)`);
+      }
+      
+      // Bottom edge alignment
+      if (Math.abs(newBottom - existingTop) <= tolerance) {
+        sharedHorizontal = true;
+        kerfSavings += Math.min(newPlacement.width, existingWidth) * kerfThickness;
+        DebugLogger.logSharedCuts(`[SHARED-CUT] Detected shared horizontal cut at Y=${newBottom} (bottom edge alignment)`);
+      }
+    }
+
+    return { sharedVertical, sharedHorizontal, kerfSavings };
+  }
+
+  /**
+   * ENHANCED KERF-AWARE SPACE CALCULATION: Only account for kerf on actual cut lines
+   * This provides more accurate space utilization by eliminating unnecessary kerf gaps
+   */
+  static calculateKerfAwareSpacing(
+    position: { x: number, y: number },
+    dimensions: { length: number, width: number },
+    existingPlacements: Placement[],
+    kerfThickness: number,
+    allParts: ProcessedPart[] = []
+  ): { 
+    effectiveWidth: number; 
+    effectiveHeight: number; 
+    kerfReduction: number;
+  } {
+    const sharedCuts = this.detectSharedCutLines(
+      existingPlacements,
+      { x: position.x, y: position.y, width: dimensions.length, height: dimensions.width },
+      kerfThickness,
+      allParts
+    );
+
+    // Start with full kerf spacing
+    let effectiveWidth = dimensions.length + kerfThickness;
+    let effectiveHeight = dimensions.width + kerfThickness;
+    let kerfReduction = 0;
+
+    // Reduce kerf requirements where cuts are shared
+    if (sharedCuts.sharedVertical) {
+      effectiveWidth = dimensions.length + (kerfThickness * 0.5); // Half kerf for shared vertical cuts
+      kerfReduction += kerfThickness * 0.5;
+      DebugLogger.logKerfAware(`[KERF-AWARE] Reduced vertical kerf by ${(kerfThickness * 0.5).toFixed(1)}mm (shared cut)`);
+    }
+
+    if (sharedCuts.sharedHorizontal) {
+      effectiveHeight = dimensions.width + (kerfThickness * 0.5); // Half kerf for shared horizontal cuts
+      kerfReduction += kerfThickness * 0.5;
+      DebugLogger.logKerfAware(`[KERF-AWARE] Reduced horizontal kerf by ${(kerfThickness * 0.5).toFixed(1)}mm (shared cut)`);
+    }
+
+    return { effectiveWidth, effectiveHeight, kerfReduction };
+  }
 }
 
 /**
@@ -1400,6 +1746,10 @@ export class MultiSheetOptimizer {
    * Calculate strategic part distribution to avoid greedy single-sheet placement
    * Ensures better distribution across multiple sheets for practical cutting
    */
+  /**
+   * Calculate strategic part distribution to avoid greedy single-sheet placement
+   * ENHANCED: Advanced mixed-size bin packing with shared cut line optimization
+   */
   private static calculateStrategicPartDistribution(
     compatibleParts: ProcessedPart[],
     stock: OptimizedStock,
@@ -1419,73 +1769,203 @@ export class MultiSheetOptimizer {
       return compatibleParts;
     }
 
-    // STRATEGIC DISTRIBUTION LOGIC:
-    // Only trigger when ALL parts could realistically fit on ONE sheet with high efficiency
-    // This prevents forcing distribution when parts naturally need multiple sheets
+    // ADVANCED MIXED-SIZE OPTIMIZATION: Analyze part size distribution
+    const partAreas = compatibleParts.map(p => ({ part: p, area: p.length * p.width }));
+    const largestArea = Math.max(...partAreas.map(p => p.area));
+    const smallestArea = Math.min(...partAreas.map(p => p.area));
+    const areaRatio = largestArea / smallestArea;
     
-    const optimalSheetsNeeded = Math.ceil(totalPartArea / (sheetArea * 0.85)); // 85% target efficiency
-    const wouldFitOnOneSheet = totalPartArea <= (sheetArea * 0.95); // Could achieve 95%+ on single sheet
+    console.log(`[STRATEGIC] Mixed-size analysis: largest=${largestArea.toLocaleString()}mm², smallest=${smallestArea.toLocaleString()}mm², ratio=${areaRatio.toFixed(1)}:1`);
     
-    console.log(`[STRATEGIC] Optimal sheets needed: ${optimalSheetsNeeded}, would fit on one sheet: ${wouldFitOnOneSheet}`);
+    // ADVANCED DISTRIBUTION ALGORITHM: Mixed-size aware load balancing
+    if (areaRatio > 3 && compatibleParts.length >= 8) {
+      console.log(`[STRATEGIC] Mixed-size scenario detected - applying advanced bin packing algorithms`);
+      return this.calculateMixedSizeDistribution(compatibleParts, stock, availableSheetsCount);
+    }
+
+    // STRATEGIC DISTRIBUTION CRITERIA: Prevent inefficient single-sheet cramming
+    const wouldFitOnOneSheet = theoreticalEfficiency <= 1.0;
+    const optimalSheetsNeeded = Math.ceil(theoreticalEfficiency);
     
     // ULTRA-AGGRESSIVE EFFICIENCY STRATEGY: Maximum material utilization
     // Apply strategic distribution more aggressively:
-    // 1. Lower threshold: Apply even when efficiency is >85% (not 95%)
-    // 2. Reduce minimum parts threshold from 12 to 8
+    // 1. Lower threshold: Apply even when efficiency is >80% (reduced from 85%)
+    // 2. Reduce minimum parts threshold from 8 to 6
     // 3. Apply to scenarios with mixed part sizes (user's exact case)
     // 4. Prioritize eliminating wasteful third sheets
-    if (wouldFitOnOneSheet && theoreticalEfficiency > 0.85 && availableSheetsCount > 1 && totalRemainingParts > 8) {
-      console.log(`[STRATEGIC] High efficiency scenario detected (${(theoreticalEfficiency * 100).toFixed(1)}%), applying aggressive distribution for maximum utilization`);
+    if (wouldFitOnOneSheet && theoreticalEfficiency > 0.80 && availableSheetsCount > 1 && totalRemainingParts > 6) {
+      console.log(`[STRATEGIC] High efficiency scenario detected (${(theoreticalEfficiency * 100).toFixed(1)}%), applying ultra-aggressive distribution for maximum utilization`);
       
-      // ULTRA-AGGRESSIVE TARGET: Aim for 90%+ per sheet to eliminate waste
-      const targetEfficiency = 0.92; // Increased from 0.88 to 0.92 for maximum material utilization
+      // ULTRA-AGGRESSIVE TARGET: Aim for 88%+ per sheet to eliminate waste
+      const targetEfficiency = 0.88; // Optimized for practical cutting efficiency
       const targetArea = sheetArea * targetEfficiency;
       
       console.log(`[STRATEGIC] Target area: ${targetArea.toLocaleString()}mm² (${(targetEfficiency * 100).toFixed(1)}% of ${sheetArea.toLocaleString()}mm²)`);
       
-      // Select parts up to target area, prioritizing larger parts first
-      const sortedParts = [...compatibleParts].sort((a, b) => {
-        const areaA = a.length * a.width;
-        const areaB = b.length * b.width;
-        return areaB - areaA; // Largest first
-      });
+      // ADVANCED SELECTION: Prioritize optimal mixed-size combinations
+      const selectedParts = this.selectOptimalPartCombination(
+        compatibleParts, 
+        targetArea, 
+        sheetArea, 
+        availableSheetsCount
+      );
       
-      const selectedParts: ProcessedPart[] = [];
-      let accumulatedArea = 0;
-      
-      for (const part of sortedParts) {
-        const partArea = part.length * part.width;
-        console.log(`[STRATEGIC] Considering part ${part.instanceId || part.partIndex} (${part.length}x${part.width}=${partArea.toLocaleString()}mm²), current total: ${accumulatedArea.toLocaleString()}mm²`);
-        
-        // MAXIMUM AGGRESSIVENESS: Allow larger overage if it prevents wasteful sheets
-        const wouldExceedTarget = accumulatedArea + partArea > targetArea;
-        const isSmallOverage = wouldExceedTarget && (accumulatedArea + partArea <= targetArea * 1.25); // Allow 25% overage (increased from 15%)
-        const improvesOverallEfficiency = (accumulatedArea + partArea) / sheetArea > 0.85; // Must achieve 85%+ efficiency (increased from 80%)
-        
-        if (!wouldExceedTarget || selectedParts.length === 0 || (isSmallOverage && improvesOverallEfficiency)) {
-          selectedParts.push(part);
-          accumulatedArea += partArea;
-          console.log(`[STRATEGIC] ✓ Added part, new total: ${accumulatedArea.toLocaleString()}mm² (${(accumulatedArea / sheetArea * 100).toFixed(1)}%)`);
-        } else {
-          console.log(`[STRATEGIC] ✗ Part would exceed target without sufficient benefit, stopping selection`);
-          break;
-        }
-      }
-      
+      const accumulatedArea = selectedParts.reduce((sum, part) => sum + (part.length * part.width), 0);
       const achievedEfficiency = accumulatedArea / sheetArea;
+      
       console.log(`[STRATEGIC] Selected ${selectedParts.length} parts (${(achievedEfficiency * 100).toFixed(1)}% efficiency) instead of ${compatibleParts.length} parts`);
       
-      // ULTRA-AGGRESSIVE SUCCESS CRITERIA: Must achieve exceptional efficiency
-      if (achievedEfficiency >= 0.85) { // Increased from 0.75 to 0.85 for ultra-aggressive utilization
+      // SUCCESS CRITERIA: Must achieve good efficiency while enabling distribution
+      if (achievedEfficiency >= 0.82 && selectedParts.length >= Math.min(6, compatibleParts.length * 0.6)) {
         return selectedParts;
       } else {
-        console.log(`[STRATEGIC] Distribution would result in low efficiency (${(achievedEfficiency * 100).toFixed(1)}%), using all parts instead`);
+        console.log(`[STRATEGIC] Advanced distribution would result in suboptimal efficiency (${(achievedEfficiency * 100).toFixed(1)}%), using fallback strategy`);
       }
     }
     
     console.log(`[STRATEGIC] No strategic distribution needed (naturally needs ${optimalSheetsNeeded} sheets), using all ${compatibleParts.length} parts`);
     // For normal cases or when strategic distribution isn't needed, use all compatible parts
     return compatibleParts;
+  }
+
+  /**
+   * ADVANCED MIXED-SIZE DISTRIBUTION: Specialized algorithm for mixed part sizes
+   * Optimizes for better space utilization and reduced sheet count
+   */
+  private static calculateMixedSizeDistribution(
+    compatibleParts: ProcessedPart[],
+    stock: OptimizedStock,
+    availableSheetsCount: number
+  ): ProcessedPart[] {
+    const sheetArea = stock.length * stock.width;
+    
+    // Categorize parts by size
+    const largePartsThreshold = sheetArea * 0.15; // Parts > 15% of sheet area
+    const smallPartsThreshold = sheetArea * 0.05; // Parts < 5% of sheet area
+    
+    const largeParts = compatibleParts.filter(p => (p.length * p.width) >= largePartsThreshold);
+    const mediumParts = compatibleParts.filter(p => {
+      const area = p.length * p.width;
+      return area < largePartsThreshold && area >= smallPartsThreshold;
+    });
+    const smallParts = compatibleParts.filter(p => (p.length * p.width) < smallPartsThreshold);
+    
+    console.log(`[MIXED-SIZE] Part distribution: ${largeParts.length} large, ${mediumParts.length} medium, ${smallParts.length} small`);
+    
+    // LOAD BALANCING ALGORITHM: Distribute parts to achieve target efficiency per sheet
+    const targetEfficiencyPerSheet = 0.85; // 85% target efficiency
+    const targetAreaPerSheet = sheetArea * targetEfficiencyPerSheet;
+    
+    // Strategy 1: Start with large parts, add medium/small to fill gaps
+    let currentAccumulation = 0;
+    const selectedParts: ProcessedPart[] = [];
+    
+    // Add largest parts first (backbone of the layout)
+    for (const largePart of largeParts.slice(0, Math.min(largeParts.length, 3))) {
+      const partArea = largePart.length * largePart.width;
+      if (currentAccumulation + partArea <= targetAreaPerSheet * 1.1) { // Allow 10% overage
+        selectedParts.push(largePart);
+        currentAccumulation += partArea;
+        console.log(`[MIXED-SIZE] Added large part ${largePart.instanceId}: ${partArea.toLocaleString()}mm² (running total: ${currentAccumulation.toLocaleString()}mm²)`);
+      }
+    }
+    
+    // Fill remaining space with medium parts
+    const remainingArea = targetAreaPerSheet - currentAccumulation;
+    const suitableMediumParts = mediumParts.filter(p => (p.length * p.width) <= remainingArea * 1.2);
+    
+    for (const mediumPart of suitableMediumParts.slice(0, Math.min(suitableMediumParts.length, 4))) {
+      const partArea = mediumPart.length * mediumPart.width;
+      if (currentAccumulation + partArea <= targetAreaPerSheet * 1.15) { // Allow 15% overage for gap filling
+        selectedParts.push(mediumPart);
+        currentAccumulation += partArea;
+        console.log(`[MIXED-SIZE] Added medium part ${mediumPart.instanceId}: ${partArea.toLocaleString()}mm² (running total: ${currentAccumulation.toLocaleString()}mm²)`);
+      }
+    }
+    
+    // Fill remaining small gaps with small parts
+    const finalRemainingArea = targetAreaPerSheet * 1.2 - currentAccumulation;
+    let smallPartsAdded = 0;
+    
+    for (const smallPart of smallParts) {
+      const partArea = smallPart.length * smallPart.width;
+      if (partArea <= finalRemainingArea && smallPartsAdded < 6) { // Limit to 6 small parts max
+        selectedParts.push(smallPart);
+        currentAccumulation += partArea;
+        smallPartsAdded++;
+        console.log(`[MIXED-SIZE] Added small part ${smallPart.instanceId}: ${partArea.toLocaleString()}mm² (running total: ${currentAccumulation.toLocaleString()}mm²)`);
+      }
+    }
+    
+    const finalEfficiency = currentAccumulation / sheetArea;
+    console.log(`[MIXED-SIZE] Final selection: ${selectedParts.length} parts, ${(finalEfficiency * 100).toFixed(1)}% efficiency`);
+    
+    // Return optimized selection if it meets criteria
+    if (finalEfficiency >= 0.75 && selectedParts.length >= 4) {
+      return selectedParts;
+    }
+    
+    // Fallback: Use all compatible parts
+    console.log(`[MIXED-SIZE] Mixed-size optimization didn't meet criteria, using all parts`);
+    return compatibleParts;
+  }
+
+  /**
+   * OPTIMAL PART COMBINATION SELECTION: Advanced algorithm for best part combinations
+   * Uses dynamic programming principles for optimal space utilization
+   */
+  private static selectOptimalPartCombination(
+    parts: ProcessedPart[],
+    targetArea: number,
+    sheetArea: number,
+    availableSheets: number
+  ): ProcessedPart[] {
+    // Sort parts by area descending for greedy approach
+    const sortedParts = [...parts].sort((a, b) => {
+      const areaA = a.length * a.width;
+      const areaB = b.length * b.width;
+      return areaB - areaA;
+    });
+    
+    // GREEDY SELECTION with look-ahead optimization
+    const selectedParts: ProcessedPart[] = [];
+    let accumulatedArea = 0;
+    const maxOverage = targetArea * 0.25; // Allow 25% overage for optimal combinations
+    
+    for (let i = 0; i < sortedParts.length; i++) {
+      const part = sortedParts[i];
+      const partArea = part.length * part.width;
+      
+      // Look ahead to see if we can fit better combinations
+      const remainingAfterThisPart = targetArea - (accumulatedArea + partArea);
+      const canFitMoreParts = sortedParts.slice(i + 1).some(p => (p.length * p.width) <= remainingAfterThisPart);
+      
+      // Decision logic: Take part if it fits well or if it's the last viable option
+      const wouldExceedTarget = accumulatedArea + partArea > targetArea;
+      const withinOverageLimit = accumulatedArea + partArea <= targetArea + maxOverage;
+      const isEssentialForEfficiency = partArea >= sheetArea * 0.1; // Large parts are essential
+      
+      if (!wouldExceedTarget || 
+          (wouldExceedTarget && withinOverageLimit && isEssentialForEfficiency) ||
+          selectedParts.length === 0) {
+        
+        selectedParts.push(part);
+        accumulatedArea += partArea;
+        
+        console.log(`[OPTIMAL] Selected part ${part.instanceId || part.partIndex} (${part.length}x${part.width}=${partArea.toLocaleString()}mm²)`);
+        console.log(`[OPTIMAL] Running total: ${accumulatedArea.toLocaleString()}mm² / ${targetArea.toLocaleString()}mm² (${(accumulatedArea/targetArea*100).toFixed(1)}%)`);
+        
+        // Stop if we've reached a good target
+        if (accumulatedArea >= targetArea * 0.85 && selectedParts.length >= 3) {
+          console.log(`[OPTIMAL] Reached efficient target, stopping selection`);
+          break;
+        }
+      } else {
+        console.log(`[OPTIMAL] Skipping part ${part.instanceId || part.partIndex} - would exceed beneficial limits`);
+      }
+    }
+    
+    return selectedParts;
   }
 }
 
@@ -1664,4 +2144,17 @@ export class OptimizedCuttingEngine {
       };
     }
   }
+}
+
+// PERFORMANCE OPTIMIZATION: Spatial indexing for faster collision detection
+export interface SpatialGrid {
+  cellSize: number;
+  grid: Map<string, Placement[]>;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+}
+
+export interface OptimizedPositionGenerator {
+  maxPositionsPerSpace: number;
+  earlyTerminationThreshold: number;
+  spatialOptimization: boolean;
 }

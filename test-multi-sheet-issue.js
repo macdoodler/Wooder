@@ -1,4 +1,4 @@
-const { OptimizedCuttingEngine } = require('./app/lib/optimized-cutting-engine.ts');
+const { OptimizedCuttingEngine } = require('./build/optimized-cutting-engine.js');
 
 // Test case: 16 parts (10x 600x400mm + 6x 200x200mm) should distribute across multiple sheets
 const testParts = [

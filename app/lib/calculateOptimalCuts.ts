@@ -12,10 +12,26 @@ import {
   getMigrationStats 
 } from './algorithm-integration';
 
-// Initialize debugging only in browser environment
+// Initialize debugging only in browser environment with performance optimization
 if (typeof window !== 'undefined') {
   console.clear(); // Clear previous logs
-  (window as any).DEBUG_CUTTING = true; // Enable verbose logging
+  (window as any).DEBUG_CUTTING = true; // Enable basic cutting debug
+  // Performance: Only enable verbose debugging when explicitly requested
+  // Set (window as any).DEBUG_VERBOSE = true for detailed logging
+  if (!(window as any).DEBUG_VERBOSE) {
+    (window as any).DEBUG_SHARED_CUTS = false;
+    (window as any).DEBUG_KERF_AWARE = false;
+    (window as any).DEBUG_COLLISION = false;
+    (window as any).DEBUG_PLACEMENT = false;
+    (window as any).DEBUG_MULTI_SHEET = false;
+  } else {
+    // When verbose debugging is enabled, activate all debug categories
+    (window as any).DEBUG_SHARED_CUTS = true;
+    (window as any).DEBUG_KERF_AWARE = true;
+    (window as any).DEBUG_COLLISION = true;
+    (window as any).DEBUG_PLACEMENT = true;
+    (window as any).DEBUG_MULTI_SHEET = true;
+  }
 }
 
 // Data structures for cross-sheet optimization
