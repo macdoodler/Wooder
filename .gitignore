@@ -237,3 +237,4 @@ MISSION-*.md
 
 # Build artifacts in wrong locations
 /build/
+wood-cutting-geometry-fix.md

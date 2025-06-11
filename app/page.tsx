@@ -215,10 +215,16 @@ export default function Home() {
 const updateStock = (index: number, field: keyof Stock, value: number | string) => {
   const updatedStocks = [...availableStocks];
   
-  // Handle numeric fields to prevent NaN
+  // Handle numeric fields with better empty string handling
   if (typeof value === 'string' && ['length', 'width', 'thickness', 'quantity'].includes(field)) {
-    const numValue = parseFloat(value);
-    (updatedStocks[index] as any)[field] = isNaN(numValue) ? 0 : numValue;
+    // If the value is empty string, keep it as empty string for display purposes
+    // Only convert to number when it's a valid number string
+    if (value === '') {
+      (updatedStocks[index] as any)[field] = '';
+    } else {
+      const numValue = parseFloat(value);
+      (updatedStocks[index] as any)[field] = isNaN(numValue) ? '' : numValue;
+    }
   } else {
     (updatedStocks[index] as any)[field] = value;
   }
@@ -262,10 +268,16 @@ const updateStock = (index: number, field: keyof Stock, value: number | string) 
 const updatePart = (index: number, field: keyof Part, value: number | string) => {
   const updatedParts = [...requiredParts];
 
- // Handle numeric fields to prevent NaN
+ // Handle numeric fields with better empty string handling
   if (typeof value === 'string' && ['length', 'width', 'thickness', 'quantity'].includes(field)) {
-    const numValue = parseFloat(value);
-    (updatedParts[index] as any)[field] = isNaN(numValue) ? 0 : numValue;
+    // If the value is empty string, keep it as empty string for display purposes
+    // Only convert to number when it's a valid number string
+    if (value === '') {
+      (updatedParts[index] as any)[field] = '';
+    } else {
+      const numValue = parseFloat(value);
+      (updatedParts[index] as any)[field] = isNaN(numValue) ? '' : numValue;
+    }
   } else {
     (updatedParts[index] as any)[field] = value;
   }
@@ -309,17 +321,29 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
       return false;
     }
 
-    // Check if all values are valid numbers
+    // Check if all values are valid numbers (handle empty strings and invalid values)
     for (const stock of availableStocks) {
-      if (stock.length <= 0 || stock.width <= 0 || stock.thickness <= 0 || stock.quantity <= 0) {
-        setErrorMessage("All stock dimensions and quantities must be positive numbers.");
+      const length = typeof stock.length === 'string' ? parseFloat(stock.length) : stock.length;
+      const width = typeof stock.width === 'string' ? parseFloat(stock.width) : stock.width;
+      const thickness = typeof stock.thickness === 'string' ? parseFloat(stock.thickness) : stock.thickness;
+      const quantity = typeof stock.quantity === 'string' ? parseFloat(stock.quantity) : stock.quantity;
+      
+      if (isNaN(length) || isNaN(width) || isNaN(thickness) || isNaN(quantity) ||
+          length <= 0 || width <= 0 || thickness <= 0 || quantity <= 0) {
+        setErrorMessage("All stock dimensions and quantities must be valid positive numbers.");
         return false;
       }
     }
 
     for (const part of requiredParts) {
-      if (part.length <= 0 || part.width <= 0 || part.thickness <= 0 || part.quantity <= 0) {
-        setErrorMessage("All part dimensions and quantities must be positive numbers.");
+      const length = typeof part.length === 'string' ? parseFloat(part.length) : part.length;
+      const width = typeof part.width === 'string' ? parseFloat(part.width) : part.width;
+      const thickness = typeof part.thickness === 'string' ? parseFloat(part.thickness) : part.thickness;
+      const quantity = typeof part.quantity === 'string' ? parseFloat(part.quantity) : part.quantity;
+      
+      if (isNaN(length) || isNaN(width) || isNaN(thickness) || isNaN(quantity) ||
+          length <= 0 || width <= 0 || thickness <= 0 || quantity <= 0) {
+        setErrorMessage("All part dimensions and quantities must be valid positive numbers.");
         return false;
       }
     }
@@ -1182,7 +1206,7 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
                   type="number"
                   className="w-full px-2 py-1 border rounded-md"
                   value={stock.length || ''}
-                  onChange={(e) => updateStock(index, 'length', parseFloat(e.target.value))}
+                  onChange={(e) => updateStock(index, 'length', e.target.value)}
                   min="0"
                   placeholder="0"
                 />
@@ -1194,7 +1218,7 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
                   type="number"
                   className="w-full px-2 py-1 border rounded-md"
                   value={stock.width || ''}
-                  onChange={(e) => updateStock(index, 'width', parseFloat(e.target.value))}
+                  onChange={(e) => updateStock(index, 'width', e.target.value)}
                   min="0"
                   placeholder="0"
                 />
@@ -1206,7 +1230,7 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
                   type="number"
                   className="w-full px-2 py-1 border rounded-md"
                   value={stock.thickness || ''}
-                  onChange={(e) => updateStock(index, 'thickness', parseFloat(e.target.value))}
+                  onChange={(e) => updateStock(index, 'thickness', e.target.value)}
                   min="0"
                   placeholder="0"
                 />
@@ -1218,7 +1242,7 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
                   type="number"
                   className="w-full px-2 py-1 border rounded-md"
                   value={stock.quantity || ''}
-                  onChange={(e) => updateStock(index, 'quantity', parseFloat(e.target.value))}
+                  onChange={(e) => updateStock(index, 'quantity', e.target.value)}
                   min="1"
                   placeholder="1"
                 />
@@ -1309,7 +1333,7 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
                   type="number"
                   className="w-full px-2 py-1 border rounded-md"
                   value={part.length}
-                  onChange={(e) => updatePart(index, 'length', parseFloat(e.target.value))}
+                  onChange={(e) => updatePart(index, 'length', e.target.value)}
                   min="0"
                 />
               </div>
@@ -1320,7 +1344,7 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
                   type="number"
                   className="w-full px-2 py-1 border rounded-md"
                   value={part.width}
-                  onChange={(e) => updatePart(index, 'width', parseFloat(e.target.value))}
+                  onChange={(e) => updatePart(index, 'width', e.target.value)}
                   min="0"
                 />
               </div>
@@ -1331,7 +1355,7 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
                   type="number"
                   className="w-full px-2 py-1 border rounded-md"
                   value={part.thickness || ''}
-                  onChange={(e) => updatePart(index, 'thickness', parseFloat(e.target.value))}
+                  onChange={(e) => updatePart(index, 'thickness', e.target.value)}
                   min="0"
                   placeholder="18"
                 />
@@ -1343,7 +1367,7 @@ const updatePart = (index: number, field: keyof Part, value: number | string) =>
                   type="number"
                   className="w-full px-2 py-1 border rounded-md"
                   value={part.quantity || ''}
-                  onChange={(e) => updatePart(index, 'quantity', parseFloat(e.target.value))}
+                  onChange={(e) => updatePart(index, 'quantity', e.target.value)}
                   min="1"
                   placeholder="1"
                 />

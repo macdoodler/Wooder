@@ -2,6 +2,7 @@
 // Implements the fundamental algorithmic principles for professional cutting optimization
 
 import { Stock, Part, Placement, FreeSpace, Results, StockUsage, MaterialType } from './types';
+import { AdvancedGeometryOptimizer, NestingResult } from './advanced-geometry-optimizer';
 
 // ===== PERFORMANCE OPTIMIZATION: DEBUG LOGGING SYSTEM =====
 
@@ -1638,7 +1639,8 @@ export class MultiSheetOptimizer {
   }
 
   /**
-   * Optimize layout for a single sheet
+   * Optimize layout for a single sheet using ADVANCED GEOMETRY OPTIMIZATION
+   * Integrates the AdvancedGeometryOptimizer for near 100% efficiency
    */
   private static optimizeSheetLayout(
     compatibleParts: ProcessedPart[],
@@ -1650,6 +1652,99 @@ export class MultiSheetOptimizer {
     usedArea: number;
     placedPartInstances: string[];
   } {
+    console.log(`[SHEET-LAYOUT] Using ADVANCED GEOMETRY OPTIMIZATION for ${compatibleParts.length} parts`);
+    
+    // Check if we should use advanced geometry optimization
+    const totalPartsArea = compatibleParts.reduce((sum, part) => sum + (part.length * part.width), 0);
+    const sheetArea = stock.length * stock.width;
+    const theoryEfficiency = totalPartsArea / sheetArea;
+    
+    console.log(`[SHEET-LAYOUT] Theory efficiency: ${(theoryEfficiency * 100).toFixed(1)}% - ${theoryEfficiency >= 0.75 ? 'Using ADVANCED GEOMETRY' : 'Using standard placement'}`);
+
+    // Use advanced geometry optimization for high-efficiency scenarios (75%+ theoretical efficiency)
+    if (theoryEfficiency >= 0.75 && compatibleParts.length >= 3) {
+      try {
+        console.log(`[ADVANCED-GEOMETRY] Attempting advanced nesting for near 100% efficiency`);
+        
+        // Convert ProcessedParts to regular Parts for the geometry optimizer
+        const regularParts = compatibleParts.map(part => ({
+          length: part.length,
+          width: part.width,
+          thickness: part.thickness,
+          material: part.material,
+          materialType: part.materialType,
+          quantity: 1, // Already expanded
+          grainDirection: part.grainDirection,
+          name: part.name
+        }));
+
+        // Create Stock type from OptimizedStock for the geometry optimizer
+        const stockForGeometry: Stock = {
+          length: stock.length,
+          width: stock.width,
+          thickness: stock.thickness,
+          material: stock.material,
+          materialType: stock.materialType,
+          quantity: 1,
+          grainDirection: stock.grainDirection
+        };
+
+        // Use advanced geometry optimizer
+        const nestingResult = AdvancedGeometryOptimizer.optimizePartPlacement(
+          regularParts,
+          stockForGeometry,
+          kerfThickness,
+          0.95 // Target 95% efficiency
+        );
+
+        if (nestingResult.placements.length > 0 && nestingResult.efficiency >= 0.80) {
+          console.log(`[ADVANCED-GEOMETRY] ✅ Success! Achieved ${(nestingResult.efficiency * 100).toFixed(1)}% efficiency with ${nestingResult.placements.length} parts`);
+          
+          // Convert geometry placements back to our format
+          const advancedPlacements = nestingResult.placements.map((placement, index) => ({
+            ...placement,
+            partId: `Part-${compatibleParts[index]?.instanceId || compatibleParts[index]?.partIndex}-adv`
+          }));
+
+          // Calculate remaining free spaces from waste polygons
+          const remainingFreeSpaces = nestingResult.wastePolygons
+            .filter(waste => waste.area >= 10000) // Only include viable waste areas (100x100mm+)
+            .map((waste, index) => ({
+              x: waste.bounds.minX,
+              y: waste.bounds.minY,
+              width: waste.bounds.maxX - waste.bounds.minX,
+              height: waste.bounds.maxY - waste.bounds.minY
+            }));
+
+          const advancedUsedArea = nestingResult.placements.reduce((sum, placement) => {
+            const part = compatibleParts.find(p => 
+              placement.partId.includes(p.instanceId || p.partIndex.toString())
+            );
+            return sum + (part ? part.length * part.width : 0);
+          }, 0);
+
+          const advancedPlacedInstances = nestingResult.placements.map((placement, index) => 
+            compatibleParts[index]?.instanceId || `${compatibleParts[index]?.partIndex}-${index}`
+          );
+
+          return {
+            placements: advancedPlacements,
+            freeSpaces: remainingFreeSpaces,
+            usedArea: advancedUsedArea,
+            placedPartInstances: advancedPlacedInstances
+          };
+        } else {
+          console.log(`[ADVANCED-GEOMETRY] ⚠️ Advanced geometry efficiency too low (${(nestingResult.efficiency * 100).toFixed(1)}%), falling back to standard placement`);
+        }
+      } catch (error: any) {
+        console.warn(`[ADVANCED-GEOMETRY] ❌ Advanced geometry optimization failed:`, error?.message || 'Unknown error');
+        console.log(`[ADVANCED-GEOMETRY] Falling back to standard placement algorithm`);
+      }
+    }
+
+    // FALLBACK: Standard placement algorithm for remaining cases
+    console.log(`[SHEET-LAYOUT] Using standard placement algorithm`);
+    
     const placements: Placement[] = [];
     let freeSpaces: FreeSpace[] = [{
       x: 0,
@@ -1668,7 +1763,7 @@ export class MultiSheetOptimizer {
       return b.priority - a.priority;
     });
 
-    // Place each part optimally
+    // Place each part optimally using enhanced placement engine
     for (const part of sortedParts) {
       if (part.quantity <= 0) continue;
 

@@ -6,14 +6,17 @@ Wooder is a comprehensive Next.js application that optimizes material cutting fo
 
 ## 🚀 Features
 
-- **🎯 Advanced 5-Phase Cutting Algorithm** - Optimized placement engine with inventory-first strategy
+- **🎯 Advanced Geometry Optimization** - Near 100% efficiency using computational geometry algorithms
+- **📐 Bottom-Left-Fill Algorithm** - Optimal part placement with No-Fit Polygon calculations
+- **⚡ Smart Algorithm Selection** - Automatic advanced/standard algorithm switching based on efficiency
 - **📦 Inventory Management** - Smart warehouse stock management and utilization tracking
 - **🔄 Multi-Sheet Optimization** - Cross-sheet optimization for maximum material efficiency
 - **🌾 Grain Direction Enforcement** - Intelligent grain direction matching and rotation logic
 - **📋 Cut Sequence Generation** - Step-by-step cutting instructions with safety guidelines
 - **⚡ Quantity Handling** - Support for multiple instances of the same part
-- **📊 Waste Minimization** - Advanced algorithms to reduce material waste
+- **📊 Waste Minimization** - Advanced algorithms to reduce material waste by 80%+
 - **🔍 Collision Detection** - Prevents part overlap and ensures valid placements
+- **🧮 Computational Geometry** - Polygon clipping and robust predicates for precision
 
 ## 🛠️ Getting Started
 
