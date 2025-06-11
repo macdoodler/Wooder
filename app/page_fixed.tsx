@@ -55,18 +55,18 @@ const SummaryPanel: React.FC<SummaryPanelProps> = ({ placedPartsCount, requiredP
 // Add color assignment function before the main component
 const getPartColor = (partIndex: number) => {
   const colors = [
-    { border: 'border-blue-700', bg: 'bg-blue-200', hexBg: '#dbeafe', hexBorder: '#1d4ed8' },
-    { border: 'border-red-700', bg: 'bg-red-200', hexBg: '#fecaca', hexBorder: '#b91c1c' },
-    { border: 'border-green-700', bg: 'bg-green-200', hexBg: '#bbf7d0', hexBorder: '#15803d' },
-    { border: 'border-yellow-700', bg: 'bg-yellow-200', hexBg: '#fef08a', hexBorder: '#a16207' },
-    { border: 'border-purple-700', bg: 'bg-purple-200', hexBg: '#e9d5ff', hexBorder: '#7c3aed' },
-    { border: 'border-pink-700', bg: 'bg-pink-200', hexBg: '#fce7f3', hexBorder: '#be185d' },
-    { border: 'border-indigo-700', bg: 'bg-indigo-200', hexBg: '#c7d2fe', hexBorder: '#4338ca' },
-    { border: 'border-orange-700', bg: 'bg-orange-200', hexBg: '#fed7aa', hexBorder: '#c2410c' },
-    { border: 'border-teal-700', bg: 'bg-teal-200', hexBg: '#99f6e4', hexBorder: '#0f766e' },
-    { border: 'border-cyan-700', bg: 'bg-cyan-200', hexBg: '#a5f3fc', hexBorder: '#0e7490' },
-    { border: 'border-lime-700', bg: 'bg-lime-200', hexBg: '#d9f99d', hexBorder: '#4d7c0f' },
-    { border: 'border-rose-700', bg: 'bg-rose-200', hexBg: '#fecdd3', hexBorder: '#be123c' }
+    { border: 'border-blue-700', bg: 'bg-blue-200' },
+    { border: 'border-red-700', bg: 'bg-red-200' },
+    { border: 'border-green-700', bg: 'bg-green-200' },
+    { border: 'border-yellow-700', bg: 'bg-yellow-200' },
+    { border: 'border-purple-700', bg: 'bg-purple-200' },
+    { border: 'border-pink-700', bg: 'bg-pink-200' },
+    { border: 'border-indigo-700', bg: 'bg-indigo-200' },
+    { border: 'border-orange-700', bg: 'bg-orange-200' },
+    { border: 'border-teal-700', bg: 'bg-teal-200' },
+    { border: 'border-cyan-700', bg: 'bg-cyan-200' },
+    { border: 'border-lime-700', bg: 'bg-lime-200' },
+    { border: 'border-rose-700', bg: 'bg-rose-200' }
   ];
   return colors[partIndex % colors.length];
 };
@@ -1039,269 +1039,46 @@ export default function Home() {
           {/* Results display */}
           {results && results.success && (
             <div className="bg-white p-4 rounded-md shadow-md mb-4">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold">Cutting Results</h2>
-                <div className="flex gap-2">
-                  <button
-                    onClick={resetAllCutStatus}
-                    className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600"
-                  >
-                    Reset All
-                  </button>
-                </div>
-              </div>
+              <h2 className="text-xl font-semibold mb-4">Results</h2>
               
-              {/* Summary Statistics */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-blue-50 p-3 rounded-lg">
-                  <div className="text-sm text-blue-600 font-medium">Sheets Used</div>
-                  <div className="text-2xl font-bold text-blue-800">{results.totalUsedSheets}</div>
-                </div>
-                <div className="bg-green-50 p-3 rounded-lg">
-                  <div className="text-sm text-green-600 font-medium">Parts Placed</div>
-                  <div className="text-2xl font-bold text-green-800">
-                    {results.stockUsage.reduce((total, usage) => total + usage.placements.length, 0)}
-                  </div>
-                </div>
-                <div className="bg-orange-50 p-3 rounded-lg">
-                  <div className="text-sm text-orange-600 font-medium">Total Waste</div>
-                  <div className="text-2xl font-bold text-orange-800">{Math.round(results.totalWaste / 1000)}cm²</div>
-                </div>
-                <div className="bg-purple-50 p-3 rounded-lg">
-                  <div className="text-sm text-purple-600 font-medium">Efficiency</div>
-                  <div className="text-2xl font-bold text-purple-800">
-                    {((results.stockUsage.reduce((total, usage) => total + usage.usedArea, 0) / 
-                       results.stockUsage.reduce((total, usage) => {
-                         const stock = availableStocks[usage.stockIndex];
-                         return total + (stock.length * stock.width);
-                       }, 0)) * 100).toFixed(1)}%
-                  </div>
-                </div>
+              <div className="mb-4">
+                <p>Total Sheets Used: <span className="font-semibold">{results.totalUsedSheets}</span></p>
+                <p>Total Waste Area: <span className="font-semibold">{Math.round(results.totalWaste)} mm²</span></p>
               </div>
 
-              {/* Visual Cutting Diagrams */}
-              <h3 className="text-lg font-semibold mb-4">Visual Cutting Diagrams</h3>
+              <h3 className="text-lg font-semibold mb-2">Stock Usage</h3>
               {results.stockUsage.map((usage, index) => {
                 const stock = availableStocks[usage.stockIndex];
-                const scale = Math.min(600 / stock.length, 400 / stock.width);
-                const scaledWidth = stock.length * scale;
-                const scaledHeight = stock.width * scale;
-                
                 return (
-                  <div key={index} className="bg-gray-50 p-4 rounded-md mb-6 shadow-sm border border-gray-200">
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="font-semibold text-blue-600">
-                        Sheet #{index + 1} - {stock.length} × {stock.width} × {stock.thickness}mm
-                      </h4>
-                      <div className="text-sm text-gray-600">
+                  <div key={index} className="bg-gray-50 p-4 rounded-md mb-4 shadow-sm border border-gray-200">
+                    <h4 className="font-semibold text-blue-600 mb-2">
+                      Stock #{index + 1} ({stock.length} x {stock.width} x {stock.thickness}mm)
+                    </h4>
+                    <div>
+                      <p>
                         {stock.materialType === MaterialType.Sheet ? 'Sheet Material' : 'Dimensional Lumber'}: {stock.material || 'Unspecified'}
                         {stock.materialType === MaterialType.Sheet && stock.grainDirection && (
-                          <span className="ml-2">
+                          <span className="ml-2 text-sm text-gray-600">
                             (Grain: {stock.grainDirection})
                           </span>
                         )}
-                      </div>
-                    </div>
-                    
-                    {/* Sheet Statistics */}
-                    <div className="grid grid-cols-3 gap-4 mb-4 text-sm">
-                      <div>Parts: <span className="font-semibold">{usage.placements.length}</span></div>
-                      <div>Used: <span className="font-semibold">{Math.round(usage.usedArea / 1000)}cm²</span></div>
-                      <div>Waste: <span className="font-semibold">{Math.round(usage.wasteArea / 1000)}cm²</span></div>
+                      </p>
+                      <p>Parts placed: {usage.placements.length}</p>
+                      <p>Waste area: {Math.round(usage.wasteArea)} mm²</p>
                     </div>
 
-                    {/* Visual Diagram */}
-                    <div className="bg-white rounded-lg p-4 border-2 border-gray-300 overflow-auto">
-                      <svg
-                        width={scaledWidth + 40}
-                        height={scaledHeight + 40}
-                        className="border border-gray-400"
-                      >
-                        {/* Sheet outline */}
-                        <rect
-                          x={20}
-                          y={20}
-                          width={scaledWidth}
-                          height={scaledHeight}
-                          fill="#f8f9fa"
-                          stroke="#343a40"
-                          strokeWidth="2"
-                        />
-                        
-                        {/* Grain direction indicator */}
-                        {stock.materialType === MaterialType.Sheet && stock.grainDirection && (
-                          <g>
-                            {stock.grainDirection === 'horizontal' ? (
-                              Array.from({length: Math.floor(scaledHeight / 20)}, (_, i) => (
-                                <line
-                                  key={i}
-                                  x1={25}
-                                  y1={25 + i * 20}
-                                  x2={scaledWidth + 15}
-                                  y2={25 + i * 20}
-                                  stroke="#e9ecef"
-                                  strokeWidth="1"
-                                  strokeDasharray="2,2"
-                                />
-                              ))
-                            ) : (
-                              Array.from({length: Math.floor(scaledWidth / 20)}, (_, i) => (
-                                <line
-                                  key={i}
-                                  x1={25 + i * 20}
-                                  y1={25}
-                                  x2={25 + i * 20}
-                                  y2={scaledHeight + 15}
-                                  stroke="#e9ecef"
-                                  strokeWidth="1"
-                                  strokeDasharray="2,2"
-                                />
-                              ))
-                            )}
-                          </g>
-                        )}
-                        
-                        {/* Part placements */}
-                        {usage.placements.map((placement, pIndex) => {
-                          const partIndex = parseInt(placement.partId.split('-')[1]) || 0;
-                          const part = requiredParts[partIndex] || requiredParts[0];
-                          const partWidth = placement.rotated ? part.width : part.length;
-                          const partHeight = placement.rotated ? part.length : part.width;
-                          const color = getPartColor(partIndex);
-                          const placementKey = generatePlacementKey(placement, index);
-                          const isCut = cutStatus[placementKey] || false;
-                          
-                          return (
-                            <g key={pIndex}>
-                              <rect
-                                x={20 + placement.x * scale}
-                                y={20 + placement.y * scale}
-                                width={partWidth * scale}
-                                height={partHeight * scale}
-                                fill={isCut ? '#d4edda' : color.hexBg}
-                                stroke={isCut ? '#28a745' : color.hexBorder}
-                                strokeWidth="2"
-                                className="cursor-pointer transition-all duration-200"
-                                onClick={() => toggleCutStatus(placementKey)}
-                              />
-                              <text
-                                x={20 + (placement.x + partWidth/2) * scale}
-                                y={20 + (placement.y + partHeight/2) * scale}
-                                textAnchor="middle"
-                                dominantBaseline="middle"
-                                fontSize="10"
-                                fill={isCut ? '#155724' : '#000'}
-                                className="pointer-events-none select-none"
-                              >
-                                {part.name || `P${partIndex + 1}`}
-                              </text>
-                              {placement.rotated && (
-                                <text
-                                  x={20 + (placement.x + partWidth/2) * scale}
-                                  y={20 + (placement.y + partHeight/2 + 8) * scale}
-                                  textAnchor="middle"
-                                  dominantBaseline="middle"
-                                  fontSize="8"
-                                  fill={isCut ? '#155724' : '#666'}
-                                  className="pointer-events-none select-none"
-                                >
-                                  ↻
-                                </text>
-                              )}
-                            </g>
-                          );
-                        })}
-                        
-                        {/* Dimensions */}
-                        <text x={scaledWidth/2 + 20} y={15} textAnchor="middle" fontSize="12" fill="#666">
-                          {stock.length}mm
-                        </text>
-                        <text x={10} y={scaledHeight/2 + 20} textAnchor="middle" fontSize="12" fill="#666" transform={`rotate(-90 10 ${scaledHeight/2 + 20})`}>
-                          {stock.width}mm
-                        </text>
-                      </svg>
-                    </div>
-
-                    {/* Cut Progress Tracker */}
-                    <div className="mt-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium">Cut Progress</span>
-                        <span className="text-sm text-gray-600">
-                          {usage.placements.filter(p => cutStatus[generatePlacementKey(p, index)]).length} / {usage.placements.length} parts cut
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div 
-                          className="bg-green-600 h-2 rounded-full transition-all duration-300"
-                          style={{
-                            width: `${(usage.placements.filter(p => cutStatus[generatePlacementKey(p, index)]).length / usage.placements.length) * 100}%`
-                          }}
-                        ></div>
-                      </div>
-                    </div>
-
-                    {/* Parts List */}
-                    <div className="mt-4">
-                      <h5 className="font-medium mb-2">Parts on this sheet:</h5>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        {usage.placements.map((placement, pIndex) => {
-                          const partIndex = parseInt(placement.partId.split('-')[1]) || 0;
-                          const part = requiredParts[partIndex] || requiredParts[0];
-                          const partWidth = placement.rotated ? part.width : part.length;
-                          const partHeight = placement.rotated ? part.length : part.width;
-                          const color = getPartColor(partIndex);
-                          const placementKey = generatePlacementKey(placement, index);
-                          const isCut = cutStatus[placementKey] || false;
-                          
-                          return (
-                            <div 
-                              key={pIndex} 
-                              className={`p-2 rounded-md border-2 cursor-pointer transition-all duration-200 ${
-                                isCut ? 'bg-green-100 border-green-500' : `${color.bg} ${color.border}`
-                              }`}
-                              onClick={() => toggleCutStatus(placementKey)}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <div className="font-medium text-sm">
-                                    {part.name || `Part ${partIndex + 1}`}
-                                    {placement.rotated && <span className="ml-1 text-xs">↻</span>}
-                                  </div>
-                                  <div className="text-xs text-gray-600">
-                                    {partWidth} × {partHeight}mm
-                                  </div>
-                                  <div className="text-xs text-gray-500">
-                                    Position: ({placement.x}, {placement.y})
-                                  </div>
-                                </div>
-                                <div className={`w-4 h-4 rounded-full ${isCut ? 'bg-green-500' : 'bg-gray-300'}`}>
-                                  {isCut && <span className="text-white text-xs">✓</span>}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
+                    <div className="grid grid-cols-2 gap-4 mt-2">
+                      {usage.placements.map((placement, pIndex) => (
+                        <div key={pIndex} className="p-2 border rounded-md bg-white shadow-sm">
+                          <p className="text-xs text-gray-500 mb-1">Part ID: {placement.partId}</p>
+                          <p className="text-xs text-gray-500 mb-1">Position: ({placement.x}, {placement.y})</p>
+                          <p className="text-xs text-gray-500">Rotation: {placement.rotated ? 'Yes' : 'No'}</p>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 );
               })}
-
-              {/* Summary Panel */}
-              <SummaryPanel 
-                placedPartsCount={
-                  results.stockUsage.reduce((counts, usage) => {
-                    usage.placements.forEach(placement => {
-                      const partIndex = parseInt(placement.partId.split('-')[1]) || 0;
-                      const part = requiredParts[partIndex] || requiredParts[0];
-                      const key = createDimensionKey(part);
-                      counts[key] = (counts[key] || 0) + 1;
-                    });
-                    return counts;
-                  }, {} as Record<string, number>)
-                }
-                requiredParts={requiredParts}
-              />
             </div>
           )}
 

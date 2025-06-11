@@ -4,7 +4,6 @@
 
 import polygonClipping from 'polygon-clipping';
 import { orient2d } from 'robust-predicates';
-import { Intersection } from 'kld-intersections';
 import { Stock, Part, Placement, FreeSpace, StockUsage } from './types';
 
 export interface GeometryPolygon {
@@ -564,16 +563,18 @@ export class AdvancedGeometryOptimizer {
   ): GeometryPolygon[] {
     try {
       // Use polygon clipping to calculate remaining areas
-      let remainingArea = [sheetPolygon.points];
+      let remainingArea: [number, number][][] = [sheetPolygon.points];
       
       for (const occupiedRegion of occupiedRegions) {
-        remainingArea = polygonClipping.difference(remainingArea, [occupiedRegion]);
+        const clippingResult = polygonClipping.difference(remainingArea, [occupiedRegion]);
+        // Convert MultiPolygon result back to our expected format
+        remainingArea = clippingResult.flatMap(polygon => polygon);
       }
 
       return remainingArea.map(regionPoints => ({
-        points: regionPoints[0] || [],
-        area: this.calculatePolygonArea(regionPoints[0] || []),
-        bounds: this.calculateBounds(regionPoints[0] || [])
+        points: regionPoints || [],
+        area: this.calculatePolygonArea(regionPoints || []),
+        bounds: this.calculateBounds(regionPoints || [])
       }));
     } catch (error) {
       console.warn('[GEOMETRY OPTIMIZER] Failed to calculate waste polygons:', error);

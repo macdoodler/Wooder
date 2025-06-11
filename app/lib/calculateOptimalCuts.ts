@@ -338,11 +338,17 @@ export function calculateOptimalCuts(
   kerfThickness: number = 0 // Default to 0 if not provided
 ): Results {
   console.log('\n🚀 === OPTIMIZED CUTTING ALGORITHM START ===');
+  console.log('🔵 [DEBUG-ENGINE] Function called with:');
+  console.log('🔵 [DEBUG-ENGINE] availableStocks:', JSON.stringify(availableStocks, null, 2));
+  console.log('🔵 [DEBUG-ENGINE] requiredParts:', JSON.stringify(requiredParts, null, 2));
+  console.log('🔵 [DEBUG-ENGINE] kerfThickness:', kerfThickness);
+  
   console.log('Using new 5-Phase Processing Pipeline');
   console.time('Total Optimization Time');
 
   // Input validation
   if (!availableStocks || availableStocks.length === 0) {
+    console.log('🔴 [DEBUG-ENGINE] No stock materials provided');
     return {
       success: false,
       message: "No stock materials provided",
@@ -355,6 +361,7 @@ export function calculateOptimalCuts(
   }
 
   if (!requiredParts || requiredParts.length === 0) {
+    console.log('🔴 [DEBUG-ENGINE] No parts to cut');
     return {
       success: false,
       message: "No parts to cut",
@@ -366,12 +373,16 @@ export function calculateOptimalCuts(
     };
   }
 
+  console.log('🔵 [DEBUG-ENGINE] About to call OptimizedCuttingEngine.executeOptimization');
+  
   // Use the new optimized 5-phase cutting engine
   const optimizedResult = OptimizedCuttingEngine.executeOptimization(
     availableStocks,
     requiredParts,
     kerfThickness
   );
+  
+  console.log('🔵 [DEBUG-ENGINE] OptimizedCuttingEngine.executeOptimization returned:', optimizedResult);
 
   // Generate cut sequences for the optimized result
   let cutSequences: OptimizedCutSequence[] = [];
