@@ -57,6 +57,27 @@ export type StockUsage = {
   freeSpaces: FreeSpace[];
 };
 
+export interface CutStep {
+  id: string;
+  stepNumber: number;
+  cutType: 'rip' | 'crosscut' | 'initial-breakdown' | 'final-trim';
+  description: string;
+  safetyNotes: string[];
+  placements: Placement[];
+  priority: 'high' | 'medium' | 'low';
+}
+
+export interface CutSequence {
+  stockUsageIndex: number;
+  sheetId: string;
+  steps: CutStep[];
+  totalSteps: number;
+  estimatedTime: number;
+  safetyScore: number;
+  efficiencyScore: number;
+  recommendations: string[];
+}
+
 export type Results = {
   success: boolean;
   message: string;
@@ -64,7 +85,7 @@ export type Results = {
   totalWaste: number;
   totalUsedSheets: number;
   sortedParts: Part[];
-  cutSequences?: import('./cutSequenceOptimizer').OptimizedCutSequence[];
+  cutSequences?: CutSequence[];
 };
 
 export type SavedCalculation = {

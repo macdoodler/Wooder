@@ -22,8 +22,7 @@ import {
   formatDimensions,
   createDimensionKey
 } from "./lib/types";
-import { handleSheetMaterialCutting, handleDimensionalLumberCutting } from "./lib/cut-helpers";
-import { calculateOptimalCuts as calculateOptimalCutsExternal } from "./lib/calculateOptimalCuts";
+import { calculateOptimalCuts as calculateOptimalCutsExternal } from "./lib/cutting-engine";
 
 // Add a warning to display placed/required count in the summary panel
 type SummaryPanelProps = {
