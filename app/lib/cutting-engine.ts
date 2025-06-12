@@ -114,10 +114,10 @@ function advancedMultiSheetOptimization(
 
       // Try different packing strategies
       const strategies = [
-        () => packWithBestFit(compatibleParts, stock, kerfThickness, partGroups),
-        () => packWithFirstFit(compatibleParts, stock, kerfThickness),
-        () => packWithAreaSort(compatibleParts, stock, kerfThickness),
-        () => packWithStripPacking(compatibleParts, stock, kerfThickness)
+        () => packWithBestFit(compatibleParts, stock, kerfThickness, partGroups, philosophy),
+        () => packWithFirstFit(compatibleParts, stock, kerfThickness, philosophy),
+        () => packWithAreaSort(compatibleParts, stock, kerfThickness, philosophy),
+        () => packWithStripPacking(compatibleParts, stock, kerfThickness, philosophy)
       ];
 
       for (const strategy of strategies) {
@@ -174,7 +174,8 @@ function packWithBestFit(
   parts: ProcessedPart[],
   stock: ProcessedStock,
   kerfThickness: number,
-  partGroups: Map<string, ProcessedPart[]>
+  partGroups: Map<string, ProcessedPart[]>,
+  philosophy?: OptimizationPhilosophy
 ): SheetLayoutResult {
   const placements: Placement[] = [];
   const placedInstances: string[] = [];
@@ -191,7 +192,7 @@ function packWithBestFit(
 
   for (const part of sortedParts) {
     const placement = findBestFitPlacement(
-      part, stock, placements, freeSpaces, kerfThickness
+      part, stock, placements, freeSpaces, kerfThickness, philosophy
     );
     
     if (placement) {
@@ -217,7 +218,8 @@ function packWithBestFit(
 function packWithFirstFit(
   parts: ProcessedPart[],
   stock: ProcessedStock,
-  kerfThickness: number
+  kerfThickness: number,
+  philosophy?: OptimizationPhilosophy
 ): SheetLayoutResult {
   const placements: Placement[] = [];
   const placedInstances: string[] = [];
@@ -230,7 +232,7 @@ function packWithFirstFit(
   for (const part of parts) {
     for (let i = 0; i < freeSpaces.length; i++) {
       const space = freeSpaces[i];
-      const placement = tryPlaceInSpace(part, space, stock, placements, kerfThickness);
+      const placement = tryPlaceInSpace(part, space, stock, placements, kerfThickness, philosophy);
       
       if (placement) {
         placements.push(placement);
@@ -254,7 +256,8 @@ function packWithFirstFit(
 function packWithAreaSort(
   parts: ProcessedPart[],
   stock: ProcessedStock,
-  kerfThickness: number
+  kerfThickness: number,
+  philosophy?: OptimizationPhilosophy
 ): SheetLayoutResult {
   const placements: Placement[] = [];
   const placedInstances: string[] = [];
@@ -283,7 +286,7 @@ function packWithAreaSort(
     
     for (const part of groupParts) {
       const placement = findBestFitPlacement(
-        part, stock, placements, freeSpaces, kerfThickness
+        part, stock, placements, freeSpaces, kerfThickness, philosophy
       );
       
       if (placement) {
@@ -310,7 +313,8 @@ function packWithAreaSort(
 function packWithStripPacking(
   parts: ProcessedPart[],
   stock: ProcessedStock,
-  kerfThickness: number
+  kerfThickness: number,
+  philosophy?: OptimizationPhilosophy
 ): SheetLayoutResult {
   const placements: Placement[] = [];
   const placedInstances: string[] = [];
@@ -322,11 +326,21 @@ function packWithStripPacking(
   let currentStripHeight = 0;
   let currentX = 0;
   
+  // Check if rotation is allowed based on grain direction
+  const checkRotation = (part: ProcessedPart, rotated: boolean) => {
+    if (isGrainConstrained(part, stock, philosophy)) {
+      return !rotated; // Only allow non-rotated orientation
+    }
+    return true;
+  };
+  
   for (const part of sortedParts) {
     // Try normal orientation first
     let placed = false;
     
     for (const rotated of [false, true]) {
+      if (!checkRotation(part, rotated)) continue;
+      
       const width = rotated ? part.width : part.length;
       const height = rotated ? part.length : part.width;
       
@@ -361,6 +375,8 @@ function packWithStripPacking(
       
       // Try placing in new strip
       for (const rotated of [false, true]) {
+        if (!checkRotation(part, rotated)) continue;
+        
         const width = rotated ? part.width : part.length;
         const height = rotated ? part.length : part.width;
         
@@ -403,15 +419,20 @@ function findBestFitPlacement(
   stock: ProcessedStock,
   existingPlacements: Placement[],
   freeSpaces: FreeSpace[],
-  kerfThickness: number
+  kerfThickness: number,
+  philosophy?: OptimizationPhilosophy
 ): OptimalPlacement | null {
   let bestPlacement: OptimalPlacement | null = null;
   let bestWaste = Infinity;
 
+  // Check if rotation is allowed based on grain direction
+  const rotationAllowed = !isGrainConstrained(part, stock, philosophy);
+  const rotationOptions = rotationAllowed ? [false, true] : [false];
+
   for (let i = 0; i < freeSpaces.length; i++) {
     const space = freeSpaces[i];
     
-    for (const rotated of [false, true]) {
+    for (const rotated of rotationOptions) {
       const width = rotated ? part.width : part.length;
       const height = rotated ? part.length : part.width;
       
@@ -455,9 +476,14 @@ function tryPlaceInSpace(
   space: FreeSpace,
   stock: ProcessedStock,
   existingPlacements: Placement[],
-  kerfThickness: number
+  kerfThickness: number,
+  philosophy?: OptimizationPhilosophy
 ): Placement | null {
-  for (const rotated of [false, true]) {
+  // Check if rotation is allowed based on grain direction
+  const rotationAllowed = !isGrainConstrained(part, stock, philosophy);
+  const rotationOptions = rotationAllowed ? [false, true] : [false];
+  
+  for (const rotated of rotationOptions) {
     const width = rotated ? part.width : part.length;
     const height = rotated ? part.length : part.width;
     
@@ -718,6 +744,31 @@ function splitSpaceAroundPlacement(
 }
 
 // ===== UTILITY FUNCTIONS =====
+
+/**
+ * Check if a part's rotation is constrained by grain direction
+ */
+function isGrainConstrained(
+  part: ProcessedPart,
+  stock: ProcessedStock,
+  philosophy?: OptimizationPhilosophy
+): boolean {
+  // Only constrain if using Grain Matching philosophy
+  if (philosophy !== OptimizationPhilosophy.GrainMatching) {
+    return false;
+  }
+  
+  // Only constrain if both part and stock have grain directions
+  if (!part.grainDirection || !stock.grainDirection) {
+    return false;
+  }
+  
+  // For sheet materials with grain direction, prevent rotation that would misalign grain
+  // Part grain should align with stock grain when not rotated
+  // If part.grainDirection === 'vertical' and stock.grainDirection === 'vertical', no rotation allowed
+  // If part.grainDirection === 'horizontal' and stock.grainDirection === 'vertical', rotation would be needed but not allowed
+  return true; // When grain matching is enabled and both have grain directions, prevent rotation
+}
 
 function hasCollisions(
   placement: Placement,
