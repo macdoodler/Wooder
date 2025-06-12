@@ -377,18 +377,63 @@ export default function WarehousePage() {
                 <label htmlFor="grainDirection" className="block text-sm font-medium text-gray-700 mb-1">
                   Grain Direction
                 </label>
-                <select
-                  id="grainDirection"
-                  name="grainDirection"
-                  value={currentItem.grainDirection}
-                  onChange={handleInputChange}
-                  className="mt-1 block w-full pl-3 pr-10 py-2 text-base bg-white border border-gray-300 focus:outline-none focus:ring-brand-orange focus:border-brand-orange sm:text-sm rounded-md shadow-sm"
-                  required
-                >
-                  <option value="">Select Direction</option>
-                  <option value="horizontal">Horizontal</option>
-                  <option value="vertical">Vertical</option>
-                </select>
+                <div className="grid grid-cols-3 gap-2">
+                  {/* None/Any option */}
+                  <button
+                    type="button"
+                    onClick={() => setCurrentItem({...currentItem, grainDirection: ''})}
+                    className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                      !currentItem.grainDirection || currentItem.grainDirection === '' 
+                        ? 'border-orange-500 bg-orange-50 text-orange-700' 
+                        : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="w-8 h-8 border-2 border-dashed border-gray-400 rounded flex items-center justify-center mb-1">
+                      <span className="text-gray-400 font-bold">?</span>
+                    </div>
+                    <span>Any</span>
+                  </button>
+
+                  {/* Horizontal grain option */}
+                  <button
+                    type="button"
+                    onClick={() => setCurrentItem({...currentItem, grainDirection: 'horizontal'})}
+                    className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                      currentItem.grainDirection === 'horizontal' 
+                        ? 'border-orange-500 bg-orange-50 text-orange-700' 
+                        : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="w-8 h-6 border border-gray-400 rounded mb-1 flex flex-col justify-center">
+                      <div className="space-y-0.5 px-1">
+                        <div className="h-0.5 bg-amber-600 rounded"></div>
+                        <div className="h-0.5 bg-amber-600 rounded"></div>
+                        <div className="h-0.5 bg-amber-600 rounded"></div>
+                      </div>
+                    </div>
+                    <span>Horizontal</span>
+                  </button>
+
+                  {/* Vertical grain option */}
+                  <button
+                    type="button"
+                    onClick={() => setCurrentItem({...currentItem, grainDirection: 'vertical'})}
+                    className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                      currentItem.grainDirection === 'vertical' 
+                        ? 'border-orange-500 bg-orange-50 text-orange-700' 
+                        : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="w-6 h-8 border border-gray-400 rounded mb-1 flex justify-center items-center">
+                      <div className="flex space-x-0.5">
+                        <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                        <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                        <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                      </div>
+                    </div>
+                    <span>Vertical</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>

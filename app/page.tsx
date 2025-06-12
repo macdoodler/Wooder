@@ -123,6 +123,11 @@ export default function Home() {
     })));
   }, [availableStocks]);
 
+  // Add memoized signature for customWeights
+  const customWeightsSignature = useMemo(() => {
+    return JSON.stringify(customWeights);
+  }, [customWeights]);
+
   // Load saved calculations and warehouse stock from database on component mount
   useEffect(() => {
     async function loadData() {
@@ -152,7 +157,9 @@ export default function Home() {
 
     // Debounce the calculation
     const timeoutId = setTimeout(() => {
-      console.log('Auto-recalculating due to parts/stocks change (including grain direction)...');
+      console.log('Auto-recalculating due to change in inputs...');
+      console.log('Parts signature:', partsSignature);
+      console.log('Stocks signature:', stocksSignature);
       
       const fixedStocks = availableStocks.map(stock => ({
         ...stock,
@@ -207,13 +214,14 @@ export default function Home() {
 
     return () => clearTimeout(timeoutId);
   }, [
-    partsSignature, // Use the signature instead of just parts
-    stocksSignature, // Use the signature for stocks too
+    partsSignature,
+    stocksSignature,
     kerfThickness,
     optimizationPhilosophy,
-    customWeights,
+    customWeightsSignature, // Use the signature instead of the object
     autoCalculate,
-    planName
+    planName,
+    useWarehouseStock // Add this to ensure recalc when switching warehouse stock
   ]);
 
   // Internal validation function that doesn't set error messages
@@ -920,7 +928,7 @@ export default function Home() {
       />
     </div>
     
-    {/* NEW: Optimization Philosophy Dropdown */}
+    {/* Optimization Philosophy Dropdown */}
     <div>
       <label className="block text-xs text-gray-500 mb-1">Optimization Philosophy</label>
       <select
@@ -948,21 +956,7 @@ export default function Home() {
     </div>
   </div>
   
-  {/* Auto-calculate toggle */}
-  <div className="mt-4 flex items-center gap-2">
-    <input
-      type="checkbox"
-      id="autoCalculate"
-      checked={autoCalculate}
-      onChange={(e) => setAutoCalculate(e.target.checked)}
-      className="rounded"
-    />
-    <label htmlFor="autoCalculate" className="text-sm text-gray-700">
-      Auto-calculate when inputs change
-    </label>
-  </div>
-  
-  {/* NEW: Custom Weights Section for Mixed Optimization */}
+  {/* Custom Weights Section for Mixed Optimization */}
   {showCustomWeights && (
     <div className="mt-4 p-4 bg-gray-50 rounded-md">
       <h3 className="text-sm font-semibold mb-3">Custom Optimization Weights</h3>
@@ -1031,6 +1025,20 @@ export default function Home() {
       </div>
     </div>
   )}
+  
+  {/* Auto-calculate toggle */}
+  <div className="mt-4 flex items-center gap-2">
+    <input
+      type="checkbox"
+      id="autoCalculate"
+      checked={autoCalculate}
+      onChange={(e) => setAutoCalculate(e.target.checked)}
+      className="rounded"
+    />
+    <label htmlFor="autoCalculate" className="text-sm text-gray-700">
+      Auto-calculate when inputs change
+    </label>
+  </div>
 </div>
           
           {/* Stock and parts management */}
@@ -1129,15 +1137,63 @@ export default function Home() {
                   {stock.materialType === MaterialType.Sheet && (
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Grain Direction</label>
-                      <select
-                        className="w-full px-2 py-1 border rounded-md"
-                        value={stock.grainDirection || ''}
-                        onChange={(e) => updateStock(index, 'grainDirection', e.target.value)}
-                      >
-                        <option value="">Select Direction</option>
-                        <option value="horizontal">Horizontal</option>
-                        <option value="vertical">Vertical</option>
-                      </select>
+                      <div className="grid grid-cols-3 gap-2">
+                        {/* None/Any option */}
+                        <button
+                          type="button"
+                          onClick={() => updateStock(index, 'grainDirection', '')}
+                          className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                            !stock.grainDirection || stock.grainDirection === '' 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                              : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="w-8 h-8 border-2 border-dashed border-gray-400 rounded flex items-center justify-center mb-1">
+                            <span className="text-gray-400 font-bold">?</span>
+                          </div>
+                          <span>Any</span>
+                        </button>
+
+                        {/* Horizontal grain option */}
+                        <button
+                          type="button"
+                          onClick={() => updateStock(index, 'grainDirection', 'horizontal')}
+                          className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                            stock.grainDirection === 'horizontal' 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                              : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="w-8 h-6 border border-gray-400 rounded mb-1 flex flex-col justify-center">
+                            <div className="space-y-0.5 px-1">
+                              <div className="h-0.5 bg-amber-600 rounded"></div>
+                              <div className="h-0.5 bg-amber-600 rounded"></div>
+                              <div className="h-0.5 bg-amber-600 rounded"></div>
+                            </div>
+                          </div>
+                          <span>Horizontal</span>
+                        </button>
+
+                        {/* Vertical grain option */}
+                        <button
+                          type="button"
+                          onClick={() => updateStock(index, 'grainDirection', 'vertical')}
+                          className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                            stock.grainDirection === 'vertical' 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                              : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="w-6 h-8 border border-gray-400 rounded mb-1 flex justify-center items-center">
+                            <div className="flex space-x-0.5">
+                              <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                              <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                              <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                            </div>
+                          </div>
+                          <span>Vertical</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1254,15 +1310,63 @@ export default function Home() {
                   {part.materialType === MaterialType.Sheet && (
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Grain Direction</label>
-                      <select
-                        className="w-full px-2 py-1 border rounded-md"
-                        value={part.grainDirection || ''}
-                        onChange={(e) => updatePart(index, 'grainDirection', e.target.value)}
-                      >
-                        <option value="">Select Direction</option>
-                        <option value="horizontal">Horizontal</option>
-                        <option value="vertical">Vertical</option>
-                      </select>
+                      <div className="grid grid-cols-3 gap-2">
+                        {/* None/Any option */}
+                        <button
+                          type="button"
+                          onClick={() => updatePart(index, 'grainDirection', '')}
+                          className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                            !part.grainDirection || part.grainDirection === '' 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                              : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="w-8 h-8 border-2 border-dashed border-gray-400 rounded flex items-center justify-center mb-1">
+                            <span className="text-gray-400 font-bold">?</span>
+                          </div>
+                          <span>Any</span>
+                        </button>
+
+                        {/* Horizontal grain option */}
+                        <button
+                          type="button"
+                          onClick={() => updatePart(index, 'grainDirection', 'horizontal')}
+                          className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                            part.grainDirection === 'horizontal' 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                              : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="w-8 h-6 border border-gray-400 rounded mb-1 flex flex-col justify-center">
+                            <div className="space-y-0.5 px-1">
+                              <div className="h-0.5 bg-amber-600 rounded"></div>
+                              <div className="h-0.5 bg-amber-600 rounded"></div>
+                              <div className="h-0.5 bg-amber-600 rounded"></div>
+                            </div>
+                          </div>
+                          <span>Horizontal</span>
+                        </button>
+
+                        {/* Vertical grain option */}
+                        <button
+                          type="button"
+                          onClick={() => updatePart(index, 'grainDirection', 'vertical')}
+                          className={`p-2 border rounded-md flex flex-col items-center justify-center h-16 text-xs transition-colors ${
+                            part.grainDirection === 'vertical' 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                              : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="w-6 h-8 border border-gray-400 rounded mb-1 flex justify-center items-center">
+                            <div className="flex space-x-0.5">
+                              <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                              <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                              <div className="w-0.5 h-6 bg-amber-600 rounded"></div>
+                            </div>
+                          </div>
+                          <span>Vertical</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1290,13 +1394,21 @@ export default function Home() {
             
             {/* Action buttons */}
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-200">
-              <button 
-                onClick={calculateOptimalCuts}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-md hover:bg-blue-700 transition-colors"
-                disabled={isLoading || autoCalculate}
-              >
-                {isLoading ? 'Calculating...' : autoCalculate ? 'Auto-calculating...' : 'Calculate Cuts'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={calculateOptimalCuts}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-md hover:bg-blue-700 transition-colors"
+                  disabled={isLoading}
+                >
+                  {isLoading ? 'Calculating...' : 'Calculate Cuts'}
+                </button>
+                
+                {autoCalculate && !isLoading && (
+                  <span className="text-sm text-gray-600">
+                    Auto-calculate is enabled
+                  </span>
+                )}
+              </div>
               
               <button 
                 onClick={saveCalculation}
@@ -1477,6 +1589,68 @@ export default function Home() {
                                   className="cursor-pointer transition-all duration-200"
                                   onClick={() => toggleCutStatus(placementKey)}
                                 />
+                                
+                                {/* Grain Direction Visualization */}
+                                {part.grainDirection && part.grainDirection !== '' && part.materialType === MaterialType.Sheet && (
+                                  <g className="pointer-events-none">
+                                    {(() => {
+                                      const rectX = 20 + placement.x * scale;
+                                      const rectY = 20 + placement.y * scale;
+                                      const rectWidth = partWidth * scale;
+                                      const rectHeight = partHeight * scale;
+                                      
+                                      // Determine actual grain direction considering rotation
+                                      let actualGrainDirection = part.grainDirection;
+                                      if (placement.rotated) {
+                                        actualGrainDirection = part.grainDirection === 'horizontal' ? 'vertical' : 'horizontal';
+                                      }
+                                      
+                                      const lineSpacing = Math.max(4, Math.min(rectWidth, rectHeight) / 8);
+                                      const grainLines = [];
+                                      
+                                      if (actualGrainDirection === 'horizontal') {
+                                        // Horizontal grain lines
+                                        const numLines = Math.floor(rectHeight / lineSpacing);
+                                        for (let i = 1; i < numLines; i++) {
+                                          const lineY = rectY + (i * lineSpacing);
+                                          grainLines.push(
+                                            <line
+                                              key={`grain-h-${i}`}
+                                              x1={rectX + 2}
+                                              y1={lineY}
+                                              x2={rectX + rectWidth - 2}
+                                              y2={lineY}
+                                              stroke={isCut ? '#28a745' : '#d4a574'}
+                                              strokeWidth="0.5"
+                                              opacity="0.6"
+                                            />
+                                          );
+                                        }
+                                      } else if (actualGrainDirection === 'vertical') {
+                                        // Vertical grain lines
+                                        const numLines = Math.floor(rectWidth / lineSpacing);
+                                        for (let i = 1; i < numLines; i++) {
+                                          const lineX = rectX + (i * lineSpacing);
+                                          grainLines.push(
+                                            <line
+                                              key={`grain-v-${i}`}
+                                              x1={lineX}
+                                              y1={rectY + 2}
+                                              x2={lineX}
+                                              y2={rectY + rectHeight - 2}
+                                              stroke={isCut ? '#28a745' : '#d4a574'}
+                                              strokeWidth="0.5"
+                                              opacity="0.6"
+                                            />
+                                          );
+                                        }
+                                      }
+                                      
+                                      return grainLines;
+                                    })()}
+                                  </g>
+                                )}
+                                
                                 <text
                                   x={20 + (placement.x + partWidth/2) * scale}
                                   y={20 + (placement.y + partHeight/2) * scale}

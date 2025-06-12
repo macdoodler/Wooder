@@ -207,7 +207,11 @@ function packWithGridLayout(
   const rotationAllowed = !isGrainConstrained(samplePart, stock, philosophy, weights);
   const rotationOptions = rotationAllowed ? [false, true] : [false];
   
-  let bestLayout = { placements: [], placedInstances: [], usedArea: 0 };
+  let bestLayout: { placements: Placement[]; placedInstances: string[]; usedArea: number } = { 
+    placements: [], 
+    placedInstances: [], 
+    usedArea: 0 
+  };
   
   // Try both orientations if allowed
   for (const rotated of rotationOptions) {
