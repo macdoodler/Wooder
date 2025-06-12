@@ -99,6 +99,9 @@ function advancedMultiSheetOptimization(
   // Group parts by dimensions for better packing
   const partGroups = groupPartsByDimensions(results.unplacedParts);
   
+  // Pre-calculate part mix for better distribution
+  const partMix = calculateOptimalPartMix(results.unplacedParts, stocks[0]);
+  
   while (results.unplacedParts.length > 0 && results.usedSheets.length < 50) {
     let bestSheetResult = null;
     let bestStock = null;
@@ -113,12 +116,13 @@ function advancedMultiSheetOptimization(
       if (compatibleParts.length === 0) continue;
 
       // Try different packing strategies
-      const strategies = [
-        () => packWithBestFit(compatibleParts, stock, kerfThickness, partGroups, philosophy),
-        () => packWithFirstFit(compatibleParts, stock, kerfThickness, philosophy),
-        () => packWithAreaSort(compatibleParts, stock, kerfThickness, philosophy),
-        () => packWithStripPacking(compatibleParts, stock, kerfThickness, philosophy)
-      ];
+     const strategies = [
+  () => packWithBestFit(compatibleParts, stock, kerfThickness, partGroups, philosophy, weights),
+  () => packWithFirstFit(compatibleParts, stock, kerfThickness, philosophy, weights),  // Add weights
+  () => packWithAreaSort(compatibleParts, stock, kerfThickness, philosophy, weights),   // Add weights
+  () => packWithStripPacking(compatibleParts, stock, kerfThickness, philosophy, weights), // Add weights
+  () => packWithMixedStrategy(compatibleParts, stock, kerfThickness, philosophy, partMix)
+];
 
       for (const strategy of strategies) {
         const sheetResult = strategy();
@@ -175,7 +179,8 @@ function packWithBestFit(
   stock: ProcessedStock,
   kerfThickness: number,
   partGroups: Map<string, ProcessedPart[]>,
-  philosophy?: OptimizationPhilosophy
+  philosophy?: OptimizationPhilosophy,
+  weights?: OptimizationWeights  // Add this parameter
 ): SheetLayoutResult {
   const placements: Placement[] = [];
   const placedInstances: string[] = [];
@@ -192,7 +197,7 @@ function packWithBestFit(
 
   for (const part of sortedParts) {
     const placement = findBestFitPlacement(
-      part, stock, placements, freeSpaces, kerfThickness, philosophy
+      part, stock, placements, freeSpaces, kerfThickness, philosophy, weights
     );
     
     if (placement) {
@@ -213,13 +218,14 @@ function packWithBestFit(
 }
 
 /**
- * First-fit packing strategy - places parts in first available space
+ * First-fit packing strategy - places parts in first available space with bottom-left priority
  */
 function packWithFirstFit(
   parts: ProcessedPart[],
   stock: ProcessedStock,
   kerfThickness: number,
-  philosophy?: OptimizationPhilosophy
+  philosophy?: OptimizationPhilosophy,
+  weights?: OptimizationWeights  // Add this parameter
 ): SheetLayoutResult {
   const placements: Placement[] = [];
   const placedInstances: string[] = [];
@@ -229,10 +235,23 @@ function packWithFirstFit(
     height: stock.width
   }];
 
-  for (const part of parts) {
+  // Sort parts by area for better packing
+  const sortedParts = [...parts].sort((a, b) => 
+    (b.length * b.width) - (a.length * a.width)
+  );
+
+  for (const part of sortedParts) {
+    // Sort free spaces by position (bottom-left priority)
+    freeSpaces.sort((a, b) => {
+      if (Math.abs(a.y - b.y) < 10) {
+        return a.x - b.x;
+      }
+      return a.y - b.y;
+    });
+    
     for (let i = 0; i < freeSpaces.length; i++) {
       const space = freeSpaces[i];
-      const placement = tryPlaceInSpace(part, space, stock, placements, kerfThickness, philosophy);
+      const placement = tryPlaceInSpace(part, space, stock, placements, kerfThickness, philosophy, weights);
       
       if (placement) {
         placements.push(placement);
@@ -251,13 +270,14 @@ function packWithFirstFit(
 }
 
 /**
- * Area-sorted packing - groups similar-sized parts together
+ * Area-sorted packing - groups similar-sized parts together with special handling for narrow parts
  */
 function packWithAreaSort(
   parts: ProcessedPart[],
   stock: ProcessedStock,
   kerfThickness: number,
-  philosophy?: OptimizationPhilosophy
+  philosophy?: OptimizationPhilosophy,
+  weights?: OptimizationWeights  // Add this parameter
 ): SheetLayoutResult {
   const placements: Placement[] = [];
   const placedInstances: string[] = [];
@@ -267,16 +287,32 @@ function packWithAreaSort(
     height: stock.width
   }];
 
-  // Group parts by similar area
-  const grouped = parts.reduce((groups, part) => {
+  // Identify narrow parts (aspect ratio > 3:1)
+  const narrowParts: ProcessedPart[] = [];
+  const regularParts: ProcessedPart[] = [];
+  
+  parts.forEach(part => {
+    const aspectRatio = Math.max(part.length, part.width) / Math.min(part.length, part.width);
+    if (aspectRatio > 3) {
+      narrowParts.push(part);
+    } else {
+      regularParts.push(part);
+    }
+  });
+  
+  // Sort narrow parts by length for better strip packing
+  narrowParts.sort((a, b) => b.length - a.length);
+  
+  // Group regular parts by similar area
+  const grouped = regularParts.reduce((groups, part) => {
     const area = part.length * part.width;
-    const key = Math.floor(area / 50000) * 50000; // Group by 50k area increments
+    const key = Math.floor(area / 50000) * 50000;
     if (!groups[key]) groups[key] = [];
     groups[key].push(part);
     return groups;
   }, {} as Record<number, ProcessedPart[]>);
 
-  // Process groups from largest to smallest
+  // Process regular parts first (largest to smallest)
   const sortedGroups = Object.keys(grouped)
     .map(Number)
     .sort((a, b) => b - a);
@@ -286,7 +322,7 @@ function packWithAreaSort(
     
     for (const part of groupParts) {
       const placement = findBestFitPlacement(
-        part, stock, placements, freeSpaces, kerfThickness, philosophy
+        part, stock, placements, freeSpaces, kerfThickness, philosophy, weights
       );
       
       if (placement) {
@@ -302,85 +338,109 @@ function packWithAreaSort(
       }
     }
   }
+  
+  // Then pack narrow parts in remaining spaces
+  for (const part of narrowParts) {
+    // Try to find tall narrow spaces first
+    let bestPlacement = null;
+    let bestScore = -1;
+    
+    for (let i = 0; i < freeSpaces.length; i++) {
+      const space = freeSpaces[i];
+      
+      // Prefer spaces that match the part's aspect ratio
+      const spaceAspect = space.height / space.width;
+      const partAspect = Math.max(part.length, part.width) / Math.min(part.length, part.width);
+      const aspectMatch = 1 / (1 + Math.abs(spaceAspect - partAspect));
+      
+      const placement = tryPlaceInSpace(part, space, stock, placements, kerfThickness, philosophy, weights);
+      
+      if (placement) {
+        const efficiency = (placement.width * placement.height) / (space.width * space.height);
+        const score = efficiency * 0.7 + aspectMatch * 0.3;
+        
+        if (score > bestScore) {
+          bestScore = score;
+          bestPlacement = { placement, spaceIndex: i };
+        }
+      }
+    }
+    
+    if (bestPlacement) {
+      placements.push(bestPlacement.placement);
+      placedInstances.push(part.instanceId || `${part.partIndex}-0`);
+      
+      freeSpaces = updateFreeSpacesOptimized(
+        freeSpaces,
+        bestPlacement.spaceIndex,
+        bestPlacement.placement,
+        kerfThickness
+      );
+    }
+  }
 
   const usedArea = calculateUsedArea(placements);
   return { placements, freeSpaces, usedArea, placedPartInstances: placedInstances };
 }
 
 /**
- * Strip packing strategy - creates horizontal strips
+ * Strip packing strategy - creates horizontal strips with better vertical stacking
  */
 function packWithStripPacking(
   parts: ProcessedPart[],
   stock: ProcessedStock,
   kerfThickness: number,
-  philosophy?: OptimizationPhilosophy
+  philosophy?: OptimizationPhilosophy,
+  weights?: OptimizationWeights  // Add this parameter
 ): SheetLayoutResult {
   const placements: Placement[] = [];
   const placedInstances: string[] = [];
   
-  // Sort parts by height (width when placed)
-  const sortedParts = [...parts].sort((a, b) => b.width - a.width);
+  // Group parts by height for better strip formation
+  const heightGroups = new Map<number, ProcessedPart[]>();
+  parts.forEach(part => {
+    const height = part.width; // Height when placed horizontally
+    if (!heightGroups.has(height)) heightGroups.set(height, []);
+    heightGroups.get(height)!.push(part);
+  });
+  
+  // Sort height groups by height (descending)
+  const sortedHeights = Array.from(heightGroups.keys()).sort((a, b) => b - a);
   
   let currentY = 0;
-  let currentStripHeight = 0;
-  let currentX = 0;
   
   // Check if rotation is allowed based on grain direction
   const checkRotation = (part: ProcessedPart, rotated: boolean) => {
-    if (isGrainConstrained(part, stock, philosophy)) {
-      return !rotated; // Only allow non-rotated orientation
+    if (isGrainConstrained(part, stock, philosophy, weights)) {
+      return !rotated;
     }
     return true;
   };
   
-  for (const part of sortedParts) {
-    // Try normal orientation first
-    let placed = false;
+  // Process each height group as a strip
+  for (const stripHeight of sortedHeights) {
+    const stripParts = heightGroups.get(stripHeight)!;
     
-    for (const rotated of [false, true]) {
-      if (!checkRotation(part, rotated)) continue;
-      
-      const width = rotated ? part.width : part.length;
-      const height = rotated ? part.length : part.width;
-      
-      // Check if part fits in current strip
-      if (currentX + width + kerfThickness <= stock.length) {
-        const placement: Placement = {
-          partId: `Part-${part.partIndex}`,
-          name: part.name || `Part ${part.partIndex + 1}`,
-          x: currentX,
-          y: currentY,
-          rotated,
-          width,
-          height
-        };
-        
-        if (!hasCollisions(placement, placements, kerfThickness)) {
-          placements.push(placement);
-          placedInstances.push(part.instanceId || `${part.partIndex}-0`);
-          currentX += width + kerfThickness;
-          currentStripHeight = Math.max(currentStripHeight, height);
-          placed = true;
-          break;
-        }
-      }
+    // Check if we have room for this strip
+    if (currentY + stripHeight + kerfThickness > stock.width) {
+      continue;
     }
     
-    // Start new strip if part doesn't fit
-    if (!placed && currentY + currentStripHeight + kerfThickness < stock.width) {
-      currentY += currentStripHeight + kerfThickness;
-      currentX = 0;
-      currentStripHeight = 0;
+    let currentX = 0;
+    let actualStripHeight = 0;
+    
+    // Place parts in this strip
+    for (const part of stripParts) {
+      let placed = false;
       
-      // Try placing in new strip
       for (const rotated of [false, true]) {
         if (!checkRotation(part, rotated)) continue;
         
         const width = rotated ? part.width : part.length;
         const height = rotated ? part.length : part.width;
         
-        if (width <= stock.length && currentY + height <= stock.width) {
+        if (currentX + width + kerfThickness <= stock.length && 
+            currentY + height <= stock.width) {
           const placement: Placement = {
             partId: `Part-${part.partIndex}`,
             name: part.name || `Part ${part.partIndex + 1}`,
@@ -395,11 +455,55 @@ function packWithStripPacking(
             placements.push(placement);
             placedInstances.push(part.instanceId || `${part.partIndex}-0`);
             currentX += width + kerfThickness;
-            currentStripHeight = height;
+            actualStripHeight = Math.max(actualStripHeight, height);
+            placed = true;
             break;
           }
         }
       }
+      
+      // If part doesn't fit in current strip, try starting a new row within the strip
+      if (!placed && actualStripHeight > 0) {
+        const nextRowY = currentY + actualStripHeight + kerfThickness;
+        if (nextRowY + part.width <= stock.width) {
+          currentX = 0;
+          currentY = nextRowY;
+          actualStripHeight = 0;
+          
+          // Try placing in new row
+          for (const rotated of [false, true]) {
+            if (!checkRotation(part, rotated)) continue;
+            
+            const width = rotated ? part.width : part.length;
+            const height = rotated ? part.length : part.width;
+            
+            if (width <= stock.length && currentY + height <= stock.width) {
+              const placement: Placement = {
+                partId: `Part-${part.partIndex}`,
+                name: part.name || `Part ${part.partIndex + 1}`,
+                x: currentX,
+                y: currentY,
+                rotated,
+                width,
+                height
+              };
+              
+              if (!hasCollisions(placement, placements, kerfThickness)) {
+                placements.push(placement);
+                placedInstances.push(part.instanceId || `${part.partIndex}-0`);
+                currentX += width + kerfThickness;
+                actualStripHeight = height;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Move to next strip
+    if (actualStripHeight > 0) {
+      currentY += actualStripHeight + kerfThickness;
     }
   }
   
@@ -420,13 +524,14 @@ function findBestFitPlacement(
   existingPlacements: Placement[],
   freeSpaces: FreeSpace[],
   kerfThickness: number,
-  philosophy?: OptimizationPhilosophy
+  philosophy?: OptimizationPhilosophy,
+  weights?: OptimizationWeights  // Add this parameter
 ): OptimalPlacement | null {
   let bestPlacement: OptimalPlacement | null = null;
   let bestWaste = Infinity;
 
   // Check if rotation is allowed based on grain direction
-  const rotationAllowed = !isGrainConstrained(part, stock, philosophy);
+  const rotationAllowed = !isGrainConstrained(part, stock, philosophy, weights);
   const rotationOptions = rotationAllowed ? [false, true] : [false];
 
   for (let i = 0; i < freeSpaces.length; i++) {
@@ -477,10 +582,11 @@ function tryPlaceInSpace(
   stock: ProcessedStock,
   existingPlacements: Placement[],
   kerfThickness: number,
-  philosophy?: OptimizationPhilosophy
+  philosophy?: OptimizationPhilosophy,
+  weights?: OptimizationWeights  // Add this parameter
 ): Placement | null {
   // Check if rotation is allowed based on grain direction
-  const rotationAllowed = !isGrainConstrained(part, stock, philosophy);
+  const rotationAllowed = !isGrainConstrained(part, stock, philosophy, weights);
   const rotationOptions = rotationAllowed ? [false, true] : [false];
   
   for (const rotated of rotationOptions) {
@@ -570,8 +676,13 @@ function updateFreeSpacesOptimized(
   // Merge overlapping spaces
   const merged = mergeOverlappingSpaces(newSpaces);
   
-  // Filter out tiny spaces
-  return merged.filter(s => s.width >= 100 && s.height >= 100);
+  // Filter out tiny spaces - adjust threshold based on smallest part dimension
+  const minDimension = 120; // Smallest part width in typical cases
+  return merged.filter(s => 
+    (s.width >= minDimension && s.height >= minDimension) ||
+    (s.width >= minDimension && s.height >= 50) || // Allow narrow tall spaces
+    (s.width >= 50 && s.height >= minDimension)    // Allow narrow wide spaces
+  );
 }
 
 /**
@@ -685,7 +796,12 @@ function calculateRemainingSpaces(
     freeSpaces = mergeOverlappingSpaces(newSpaces);
   }
   
-  return freeSpaces.filter(s => s.width >= 100 && s.height >= 100);
+  const minDimension = 120;
+  return freeSpaces.filter(s => 
+    (s.width >= minDimension && s.height >= minDimension) ||
+    (s.width >= minDimension && s.height >= 50) ||
+    (s.width >= 50 && s.height >= minDimension)
+  );
 }
 
 /**
@@ -746,28 +862,187 @@ function splitSpaceAroundPlacement(
 // ===== UTILITY FUNCTIONS =====
 
 /**
+ * Calculate optimal part mix for better distribution
+ */
+function calculateOptimalPartMix(parts: ProcessedPart[], stock: ProcessedStock): Map<string, number> {
+  const mix = new Map<string, number>();
+  const sheetArea = stock.length * stock.width;
+  
+  // Group parts by type
+  const partTypes = new Map<string, { count: number; area: number }>();
+  parts.forEach(part => {
+    const key = `${part.length}x${part.width}`;
+    if (!partTypes.has(key)) {
+      partTypes.set(key, { count: 0, area: part.length * part.width });
+    }
+    partTypes.get(key)!.count++;
+  });
+  
+  // Calculate ideal distribution
+  partTypes.forEach((info, key) => {
+    const partArea = info.area;
+    const idealPerSheet = Math.floor(sheetArea * 0.9 / partArea); // Target 90% efficiency
+    mix.set(key, Math.min(idealPerSheet, info.count));
+  });
+  
+  return mix;
+}
+
+/**
+ * Mixed strategy - combines multiple approaches for better results
+ */
+function packWithMixedStrategy(
+  parts: ProcessedPart[],
+  stock: ProcessedStock,
+  kerfThickness: number,
+  philosophy: OptimizationPhilosophy,
+  partMix: Map<string, number>
+): SheetLayoutResult {
+  const placements: Placement[] = [];
+  const placedInstances: string[] = [];
+  let freeSpaces: FreeSpace[] = [{
+    x: 0, y: 0,
+    width: stock.length,
+    height: stock.width
+  }];
+  
+  // Separate narrow and regular parts
+  const narrowParts: ProcessedPart[] = [];
+  const regularParts: ProcessedPart[] = [];
+  
+  parts.forEach(part => {
+    const aspectRatio = Math.max(part.length, part.width) / Math.min(part.length, part.width);
+    if (aspectRatio > 3) {
+      narrowParts.push(part);
+    } else {
+      regularParts.push(part);
+    }
+  });
+  
+  // Group regular parts by dimensions
+  const partGroups = new Map<string, ProcessedPart[]>();
+  regularParts.forEach(part => {
+    const key = `${part.length}x${part.width}`;
+    if (!partGroups.has(key)) partGroups.set(key, []);
+    partGroups.get(key)!.push(part);
+  });
+  
+  // Sort groups by area (largest first)
+  const sortedGroups = Array.from(partGroups.entries())
+    .sort((a, b) => {
+      const aArea = parseInt(a[0].split('x')[0]) * parseInt(a[0].split('x')[1]);
+      const bArea = parseInt(b[0].split('x')[0]) * parseInt(b[0].split('x')[1]);
+      return bArea - aArea;
+    });
+  
+  // First pass: Place regular parts
+  for (const [key, groupParts] of sortedGroups) {
+    const targetCount = partMix.get(key) || groupParts.length;
+    let placed = 0;
+    
+    for (const part of groupParts) {
+      if (placed >= targetCount) break;
+      
+      const placement = findBestFitPlacement(
+        part, stock, placements, freeSpaces, kerfThickness, philosophy
+      );
+      
+      if (placement) {
+        placements.push(placement.placement);
+        placedInstances.push(part.instanceId || `${part.partIndex}-0`);
+        freeSpaces = updateFreeSpacesOptimized(
+          freeSpaces, placement.spaceIndex, placement.placement, kerfThickness
+        );
+        placed++;
+      }
+    }
+  }
+  
+  // Second pass: Pack narrow parts efficiently
+  if (narrowParts.length > 0) {
+    // Sort narrow parts by length
+    narrowParts.sort((a, b) => b.length - a.length);
+    
+    // Try to create vertical columns for narrow parts
+    const narrowWidth = Math.max(...narrowParts.map(p => Math.min(p.length, p.width)));
+    
+    for (const part of narrowParts) {
+      let bestPlacement = null;
+      let bestScore = -1;
+      
+      // Look for vertical spaces that can accommodate multiple narrow parts
+      for (let i = 0; i < freeSpaces.length; i++) {
+        const space = freeSpaces[i];
+        
+        // Check if space can fit the part
+        const placement = tryPlaceInSpace(part, space, stock, placements, kerfThickness, philosophy);
+        
+        if (placement) {
+          // Score based on how well it uses vertical space
+          const verticalUtilization = placement.height / space.height;
+          const horizontalWaste = (space.width - placement.width) / space.width;
+          const score = verticalUtilization * 0.7 + (1 - horizontalWaste) * 0.3;
+          
+          if (score > bestScore) {
+            bestScore = score;
+            bestPlacement = { placement, spaceIndex: i };
+          }
+        }
+      }
+      
+      if (bestPlacement) {
+        placements.push(bestPlacement.placement);
+        placedInstances.push(part.instanceId || `${part.partIndex}-0`);
+        freeSpaces = updateFreeSpacesOptimized(
+          freeSpaces, bestPlacement.spaceIndex, bestPlacement.placement, kerfThickness
+        );
+      }
+    }
+  }
+  
+  // Final pass: Fill any remaining small spaces
+  const remainingParts = parts.filter(p => 
+    !placedInstances.includes(p.instanceId || `${p.partIndex}-0`)
+  );
+  
+  for (const part of remainingParts) {
+    const placement = findBestFitPlacement(
+      part, stock, placements, freeSpaces, kerfThickness, philosophy
+    );
+    
+    if (placement) {
+      placements.push(placement.placement);
+      placedInstances.push(part.instanceId || `${part.partIndex}-0`);
+      freeSpaces = updateFreeSpacesOptimized(
+        freeSpaces, placement.spaceIndex, placement.placement, kerfThickness
+      );
+    }
+  }
+  
+  const usedArea = calculateUsedArea(placements);
+  return { placements, freeSpaces, usedArea, placedPartInstances: placedInstances };
+}
+
+/**
  * Check if a part's rotation is constrained by grain direction
  */
 function isGrainConstrained(
   part: ProcessedPart,
   stock: ProcessedStock,
-  philosophy?: OptimizationPhilosophy
+  philosophy?: OptimizationPhilosophy,
+  weights?: OptimizationWeights
 ): boolean {
-  // Only constrain if using Grain Matching philosophy
-  if (philosophy !== OptimizationPhilosophy.GrainMatching) {
-    return false;
+  // Constrain if using Grain Matching philosophy
+  if (philosophy === OptimizationPhilosophy.GrainMatching) {
+    return !!(part.grainDirection && stock.grainDirection);
   }
   
-  // Only constrain if both part and stock have grain directions
-  if (!part.grainDirection || !stock.grainDirection) {
-    return false;
+  // Also constrain if using Mixed Optimization with high grain weight
+  if (philosophy === OptimizationPhilosophy.MixedOptimization && weights && weights.grainAlignment >= 0.8) {
+    return !!(part.grainDirection && stock.grainDirection);
   }
   
-  // For sheet materials with grain direction, prevent rotation that would misalign grain
-  // Part grain should align with stock grain when not rotated
-  // If part.grainDirection === 'vertical' and stock.grainDirection === 'vertical', no rotation allowed
-  // If part.grainDirection === 'horizontal' and stock.grainDirection === 'vertical', rotation would be needed but not allowed
-  return true; // When grain matching is enabled and both have grain directions, prevent rotation
+  return false;
 }
 
 function hasCollisions(
@@ -826,7 +1101,24 @@ function evaluateSheetResult(
   const efficiency = result.usedArea / sheetArea;
   
   let score = efficiency * 1000;
+  
+  // Heavily penalize very low efficiency sheets (under 50%)
+  if (efficiency < 0.5) {
+    score *= 0.5;
+  }
+  
+  // Bonus for high efficiency (over 70%)
+  if (efficiency > 0.7) {
+    score *= 1.2;
+  }
+  
+  // Bonus for more parts placed
   score += result.placements.length * 10;
+  
+  // Extra bonus for very full sheets (over 90%)
+  if (efficiency > 0.9) {
+    score += 200;
+  }
   
   if (philosophy === OptimizationPhilosophy.MinimumCuts) {
     const alignedCuts = countAlignedCuts(result.placements);

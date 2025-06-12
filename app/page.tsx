@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { 
   fetchCalculations, 
   createCalculation, 
@@ -21,10 +21,10 @@ import {
   MaterialType,
   formatDimensions,
   createDimensionKey,
-  OptimizationPhilosophy,           // Add this
-  OptimizationPhilosophyDescriptions, // Add this
-  OptimizationWeights,               // Add this
-  DefaultOptimizationWeights         // Add this
+  OptimizationPhilosophy,
+  OptimizationPhilosophyDescriptions,
+  OptimizationWeights,
+  DefaultOptimizationWeights
 } from "./lib/types";
 import { calculateOptimalCuts as calculateOptimalCutsExternal } from "./lib/cutting-engine";
 
@@ -94,6 +94,29 @@ export default function Home() {
   const [optimizationPhilosophy, setOptimizationPhilosophy] = useState<OptimizationPhilosophy>(OptimizationPhilosophy.MaximumYield);
   const [customWeights, setCustomWeights] = useState<OptimizationWeights>(DefaultOptimizationWeights[OptimizationPhilosophy.MaximumYield]);
   const [showCustomWeights, setShowCustomWeights] = useState(false);
+  
+  // NEW: Auto-recalculation states
+  const [autoRecalculate, setAutoRecalculate] = useState(true);
+  const [isRecalculating, setIsRecalculating] = useState(false);
+  const recalcTimeoutRef = useRef<NodeJS.Timeout>();
+
+  // NEW: Debounced recalculation function
+  const debouncedRecalculate = useCallback((delay: number = 300) => {
+    // Clear any existing timeout
+    if (recalcTimeoutRef.current) {
+      clearTimeout(recalcTimeoutRef.current);
+    }
+    
+    // Only recalculate if auto-recalc is on and we have valid inputs
+    if (autoRecalculate && results && planName && availableStocks.length > 0 && requiredParts.length > 0) {
+      setIsRecalculating(true);
+      
+      recalcTimeoutRef.current = setTimeout(() => {
+        calculateOptimalCuts();
+        setIsRecalculating(false);
+      }, delay);
+    }
+  }, [autoRecalculate, results, planName, availableStocks, requiredParts]);
 
   // Load saved calculations and warehouse stock from database on component mount
   useEffect(() => {
@@ -116,6 +139,15 @@ export default function Home() {
     loadData();
   }, []);
 
+  // NEW: Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (recalcTimeoutRef.current) {
+        clearTimeout(recalcTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Reset resultsAreFreshForDeduction if results become null
   useEffect(() => {
     if (results === null) {
@@ -130,27 +162,28 @@ export default function Home() {
 
   // Track unsaved changes - mark as unsaved when form data changes
   useEffect(() => {
-  if (isEditing && currentCalcId) {
-    const currentCalculation = savedCalculations.find(calc => calc.id === currentCalcId);
-    if (currentCalculation) {
-      const hasFormChanges = 
-        planName !== currentCalculation.name ||
-        description !== (currentCalculation.description || "") ||
-        kerfThickness !== currentCalculation.kerfThickness ||
-        optimizationPhilosophy !== (currentCalculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield) || // Add this
-        JSON.stringify(customWeights) !== JSON.stringify(currentCalculation.customWeights || DefaultOptimizationWeights[currentCalculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield]) || // Add this
-        JSON.stringify(availableStocks) !== JSON.stringify(currentCalculation.availableStocks) ||
-        JSON.stringify(requiredParts) !== JSON.stringify(currentCalculation.requiredParts) ||
-        JSON.stringify(results) !== JSON.stringify(currentCalculation.results);
-      
-      setHasUnsavedChanges(hasFormChanges);
+    if (isEditing && currentCalcId) {
+      const currentCalculation = savedCalculations.find(calc => calc.id === currentCalcId);
+      if (currentCalculation) {
+        const hasFormChanges = 
+          planName !== currentCalculation.name ||
+          description !== (currentCalculation.description || "") ||
+          kerfThickness !== currentCalculation.kerfThickness ||
+          optimizationPhilosophy !== (currentCalculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield) ||
+          JSON.stringify(customWeights) !== JSON.stringify(currentCalculation.customWeights || DefaultOptimizationWeights[currentCalculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield]) ||
+          JSON.stringify(availableStocks) !== JSON.stringify(currentCalculation.availableStocks) ||
+          JSON.stringify(requiredParts) !== JSON.stringify(currentCalculation.requiredParts) ||
+          JSON.stringify(results) !== JSON.stringify(currentCalculation.results);
+        
+        setHasUnsavedChanges(hasFormChanges);
+      }
+    } else if (!isEditing && (planName || description || kerfThickness || availableStocks.length > 0 || requiredParts.length > 0)) {
+      setHasUnsavedChanges(true);
+    } else {
+      setHasUnsavedChanges(false);
     }
-  } else if (!isEditing && (planName || description || kerfThickness || availableStocks.length > 0 || requiredParts.length > 0)) {
-    setHasUnsavedChanges(true);
-  } else {
-    setHasUnsavedChanges(false);
-  }
-}, [planName, description, kerfThickness, optimizationPhilosophy, customWeights, availableStocks, requiredParts, results, isEditing, currentCalcId, savedCalculations]); // Add optimizationPhilosophy and customWeights to dependencies
+  }, [planName, description, kerfThickness, optimizationPhilosophy, customWeights, availableStocks, requiredParts, results, isEditing, currentCalcId, savedCalculations]);
+
   // Add browser warning for unsaved changes
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -188,9 +221,9 @@ export default function Home() {
     setPlanName("");
     setDescription("");
     setKerfThickness(0);
-    setOptimizationPhilosophy(OptimizationPhilosophy.MaximumYield);    // Add this
-  setCustomWeights(DefaultOptimizationWeights[OptimizationPhilosophy.MaximumYield]); // Add this
-  setShowCustomWeights(false);                                        // Add this
+    setOptimizationPhilosophy(OptimizationPhilosophy.MaximumYield);
+    setCustomWeights(DefaultOptimizationWeights[OptimizationPhilosophy.MaximumYield]);
+    setShowCustomWeights(false);
     setAvailableStocks([]);
     setRequiredParts([]);
     setResults(null);
@@ -236,8 +269,9 @@ export default function Home() {
     
     setAvailableStocks(updatedStocks);
     
-    if (field === 'grainDirection' && results && planName && updatedStocks.length > 0 && requiredParts.length > 0) {
-      setTimeout(() => calculateOptimalCuts(), 100);
+    // NEW: Trigger recalculation for important fields
+    if (['length', 'width', 'thickness', 'quantity', 'grainDirection'].includes(field)) {
+      debouncedRecalculate(800); // Longer delay for typing
     }
   };
 
@@ -281,8 +315,9 @@ export default function Home() {
     
     setRequiredParts(updatedParts);
     
-    if (field === 'grainDirection' && results && planName && availableStocks.length > 0 && updatedParts.length > 0) {
-      setTimeout(() => calculateOptimalCuts(), 100);
+    // NEW: Trigger recalculation for important fields
+    if (['length', 'width', 'thickness', 'quantity', 'grainDirection'].includes(field)) {
+      debouncedRecalculate(800); // Longer delay for typing
     }
   };
 
@@ -375,93 +410,93 @@ export default function Home() {
   };
 
   const calculateOptimalCuts = () => {
-  const fixedStocks = availableStocks.map(stock => ({
-    ...stock,
-    materialType: (stock.materialType as any) === 'Sheet Material' ? MaterialType.Sheet : 
-                 (stock.materialType as any) === 'Dimensional Lumber' ? MaterialType.Dimensional : 
-                 stock.materialType
-  }));
-  
-  const fixedParts = requiredParts.map(part => ({
-    ...part,
-    materialType: (part.materialType as any) === 'Sheet Material' ? MaterialType.Sheet : 
-                 (part.materialType as any) === 'Dimensional Lumber' ? MaterialType.Dimensional : 
-                 part.materialType
-  }));
-  
-  if (JSON.stringify(fixedStocks) !== JSON.stringify(availableStocks)) {
-    setAvailableStocks(fixedStocks);
-  }
-  
-  if (JSON.stringify(fixedParts) !== JSON.stringify(requiredParts)) {
-    setRequiredParts(fixedParts);
-  }
-  
-  if (!validateInputs()) {
-    return;
-  }
-  
-  setCutStatus({});
-  setIsLoading(true);
-  setResultsAreFreshForDeduction(false); 
-  
-  try {
-    // Update this line to pass optimization parameters
-    const results = calculateOptimalCutsExternal(
-      fixedStocks, 
-      fixedParts, 
-      kerfThickness,
-      optimizationPhilosophy,  // Add this
-      optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization ? customWeights : undefined // Add this
-    );
+    const fixedStocks = availableStocks.map(stock => ({
+      ...stock,
+      materialType: (stock.materialType as any) === 'Sheet Material' ? MaterialType.Sheet : 
+                   (stock.materialType as any) === 'Dimensional Lumber' ? MaterialType.Dimensional : 
+                   stock.materialType
+    }));
     
-    if (results.success) {
-      setResults(results);
-      setErrorMessage(null);
-
-      if (useWarehouseStock && results.stockUsage && results.stockUsage.length > 0) {
-        setResultsAreFreshForDeduction(true);
-      }
-    } else {
-      setErrorMessage(results.message || "Calculation failed");
-      setResults(null);
-      setResultsAreFreshForDeduction(false);
+    const fixedParts = requiredParts.map(part => ({
+      ...part,
+      materialType: (part.materialType as any) === 'Sheet Material' ? MaterialType.Sheet : 
+                   (part.materialType as any) === 'Dimensional Lumber' ? MaterialType.Dimensional : 
+                   part.materialType
+    }));
+    
+    if (JSON.stringify(fixedStocks) !== JSON.stringify(availableStocks)) {
+      setAvailableStocks(fixedStocks);
     }
+    
+    if (JSON.stringify(fixedParts) !== JSON.stringify(requiredParts)) {
+      setRequiredParts(fixedParts);
+    }
+    
+    if (!validateInputs()) {
+      return;
+    }
+    
+    setCutStatus({});
+    setIsLoading(true);
+    setIsRecalculating(false); // NEW: Clear recalculating state
+    setResultsAreFreshForDeduction(false); 
+    
+    try {
+      const results = calculateOptimalCutsExternal(
+        fixedStocks, 
+        fixedParts, 
+        kerfThickness,
+        optimizationPhilosophy,
+        optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization ? customWeights : undefined
+      );
+      
+      if (results.success) {
+        setResults(results);
+        setErrorMessage(null);
 
-  } catch (error: any) {
-    console.error("Error calculating cuts:", error);
-    setErrorMessage(error.message || "An error occurred during calculation");
-    setResults(null); 
-    setResultsAreFreshForDeduction(false);
-  } finally {
-    setIsLoading(false);
-  }
-};
+        if (useWarehouseStock && results.stockUsage && results.stockUsage.length > 0) {
+          setResultsAreFreshForDeduction(true);
+        }
+      } else {
+        setErrorMessage(results.message || "Calculation failed");
+        setResults(null);
+        setResultsAreFreshForDeduction(false);
+      }
+
+    } catch (error: any) {
+      console.error("Error calculating cuts:", error);
+      setErrorMessage(error.message || "An error occurred during calculation");
+      setResults(null); 
+      setResultsAreFreshForDeduction(false);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const saveCalculation = async () => {
-  if (!validateInputs()) {
-    return;
-  }
+    if (!validateInputs()) {
+      return;
+    }
 
-  setIsLoading(true);
-  let calculationSavedSuccessfully = false;
-  
-  try {
-    const timestamp = Date.now();
+    setIsLoading(true);
+    let calculationSavedSuccessfully = false;
     
-    const calculationToSave: SavedCalculation = {
-      id: currentCalcId || `calc-${timestamp}`,
-      name: planName,
-      description,
-      kerfThickness,
-      optimizationPhilosophy,     // Add this
-      customWeights: optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization ? customWeights : undefined, // Add this
-      availableStocks,
-      requiredParts,
-      results, 
-      dateCreated: isEditing && currentCalcId ? (savedCalculations.find(c => c.id === currentCalcId)?.dateCreated || timestamp) : timestamp,
-      dateModified: timestamp
-    };
+    try {
+      const timestamp = Date.now();
+      
+      const calculationToSave: SavedCalculation = {
+        id: currentCalcId || `calc-${timestamp}`,
+        name: planName,
+        description,
+        kerfThickness,
+        optimizationPhilosophy,
+        customWeights: optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization ? customWeights : undefined,
+        availableStocks,
+        requiredParts,
+        results, 
+        dateCreated: isEditing && currentCalcId ? (savedCalculations.find(c => c.id === currentCalcId)?.dateCreated || timestamp) : timestamp,
+        dateModified: timestamp
+      };
 
       if (isEditing && currentCalcId) {
         const success = await updateCalculation(calculationToSave);
@@ -553,33 +588,33 @@ export default function Home() {
   };
 
   const loadCalculation = (id: string) => {
-  if (hasUnsavedChanges) {
-    const confirmed = confirm("You have unsaved changes. Loading a new calculation will discard them. Are you sure?");
-    if (!confirmed) return;
-  }
-  
-  const calculation = savedCalculations.find(calc => calc.id === id);
-  if (!calculation) {
-    alert("Calculation not found.");
-    return;
-  }
+    if (hasUnsavedChanges) {
+      const confirmed = confirm("You have unsaved changes. Loading a new calculation will discard them. Are you sure?");
+      if (!confirmed) return;
+    }
+    
+    const calculation = savedCalculations.find(calc => calc.id === id);
+    if (!calculation) {
+      alert("Calculation not found.");
+      return;
+    }
 
-  setPlanName(calculation.name);
-  setDescription(calculation.description || "");
-  setKerfThickness(calculation.kerfThickness);
-  setOptimizationPhilosophy(calculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield); // Add this
-  setCustomWeights(calculation.customWeights || DefaultOptimizationWeights[calculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield]); // Add this
-  setShowCustomWeights(calculation.optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization); // Add this
-  setAvailableStocks(JSON.parse(JSON.stringify(calculation.availableStocks)));
-  setRequiredParts(JSON.parse(JSON.stringify(calculation.requiredParts)));
-  setResults(calculation.results ? JSON.parse(JSON.stringify(calculation.results)) : null);
-  setCurrentCalcId(calculation.id);
-  setIsEditing(true);
-  setErrorMessage(null);
-  setResultsAreFreshForDeduction(false); 
-  setUseWarehouseStock(calculation.availableStocks.some(s => s.id));
-  setHasUnsavedChanges(false);
-};
+    setPlanName(calculation.name);
+    setDescription(calculation.description || "");
+    setKerfThickness(calculation.kerfThickness);
+    setOptimizationPhilosophy(calculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield);
+    setCustomWeights(calculation.customWeights || DefaultOptimizationWeights[calculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield]);
+    setShowCustomWeights(calculation.optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization);
+    setAvailableStocks(JSON.parse(JSON.stringify(calculation.availableStocks)));
+    setRequiredParts(JSON.parse(JSON.stringify(calculation.requiredParts)));
+    setResults(calculation.results ? JSON.parse(JSON.stringify(calculation.results)) : null);
+    setCurrentCalcId(calculation.id);
+    setIsEditing(true);
+    setErrorMessage(null);
+    setResultsAreFreshForDeduction(false); 
+    setUseWarehouseStock(calculation.availableStocks.some(s => s.id));
+    setHasUnsavedChanges(false);
+  };
 
   const deleteSavedCalculation = async (id: string) => {
     if (!confirm("Are you sure you want to delete this calculation?")) {
@@ -719,158 +754,157 @@ export default function Home() {
           )}
 
           {/* Calculation plan form */}
-          <div className="bg-white p-4 rounded-md shadow-md mb-4">
-  <div className="flex items-center justify-between mb-4">
-    <h2 className="text-xl font-semibold">Calculation Plan</h2>
-    <div className="flex items-center gap-2 text-sm">
-      {isEditing && currentCalcId && (
-        <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded">
-          Editing: {planName || 'Untitled'}
-        </span>
-      )}
-      {hasUnsavedChanges && (
-        <span className="text-orange-600 bg-orange-50 px-2 py-1 rounded flex items-center gap-1">
-          <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse"></div>
-          Unsaved
-        </span>
-      )}
-      {isEditing && !hasUnsavedChanges && (
-        <span className="text-green-600 bg-green-50 px-2 py-1 rounded">
-          Saved
-        </span>
-      )}
-    </div>
-  </div>
-  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-    <div>
-      <label className="block text-xs text-gray-500 mb-1">Plan Name</label>
-      <input
-        type="text"
-        className="w-full px-2 py-1 border rounded-md"
-        value={planName}
-        onChange={(e) => setPlanName(e.target.value)}
-      />
-    </div>
-    
-    <div>
-      <label className="block text-xs text-gray-500 mb-1">Description</label>
-      <input
-        type="text"
-        className="w-full px-2 py-1 border rounded-md"
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-      />
-    </div>
-    
-    <div>
-      <label className="block text-xs text-gray-500 mb-1">Kerf Thickness (mm)</label>
-      <input
-        type="number"
-        className="w-full px-2 py-1 border rounded-md"
-        value={kerfThickness}
-        onChange={(e) => setKerfThickness(parseFloat(e.target.value))}
-        min="0"
-      />
-    </div>
-    
-    {/* NEW: Optimization Philosophy Dropdown */}
-    <div>
-      <label className="block text-xs text-gray-500 mb-1">Optimization Philosophy</label>
-      <select
-        className="w-full px-2 py-1 border rounded-md"
-        value={optimizationPhilosophy}
-        onChange={(e) => {
-          const newPhilosophy = e.target.value as OptimizationPhilosophy;
-          setOptimizationPhilosophy(newPhilosophy);
-          setCustomWeights(DefaultOptimizationWeights[newPhilosophy]);
-          setShowCustomWeights(newPhilosophy === OptimizationPhilosophy.MixedOptimization);
-        }}
-      >
-        <option value={OptimizationPhilosophy.MaximumYield}>Maximum Yield</option>
-        <option value={OptimizationPhilosophy.MinimumCuts}>Minimum Cuts</option>
-        <option value={OptimizationPhilosophy.GuillotineCutting}>Guillotine Cutting</option>
-        <option value={OptimizationPhilosophy.PartGrouping}>Part Grouping</option>
-        <option value={OptimizationPhilosophy.PriorityBased}>Priority Based</option>
-        <option value={OptimizationPhilosophy.GrainMatching}>Grain Matching</option>
-        <option value={OptimizationPhilosophy.InventoryManagement}>Inventory Management</option>
-        <option value={OptimizationPhilosophy.MixedOptimization}>Mixed Optimization</option>
-      </select>
-      <p className="text-xs text-gray-600 mt-1">
-        {OptimizationPhilosophyDescriptions[optimizationPhilosophy]}
-      </p>
-    </div>
-  </div>
-  
-  {/* NEW: Custom Weights Section for Mixed Optimization */}
-  {showCustomWeights && (
-    <div className="mt-4 p-4 bg-gray-50 rounded-md">
-      <h3 className="text-sm font-semibold mb-3">Custom Optimization Weights</h3>
-      <p className="text-xs text-gray-600 mb-3">Adjust the importance of each factor (0-1 scale)</p>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Material Efficiency</label>
-          <input
-            type="number"
-            className="w-full px-2 py-1 border rounded-md text-sm"
-            value={customWeights.materialEfficiency}
-            onChange={(e) => setCustomWeights({...customWeights, materialEfficiency: parseFloat(e.target.value) || 0})}
-            min="0"
-            max="1"
-            step="0.1"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Cutting Simplicity</label>
-          <input
-            type="number"
-            className="w-full px-2 py-1 border rounded-md text-sm"
-            value={customWeights.cuttingSimplicity}
-            onChange={(e) => setCustomWeights({...customWeights, cuttingSimplicity: parseFloat(e.target.value) || 0})}
-            min="0"
-            max="1"
-            step="0.1"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Part Grouping</label>
-          <input
-            type="number"
-            className="w-full px-2 py-1 border rounded-md text-sm"
-            value={customWeights.partGrouping}
-            onChange={(e) => setCustomWeights({...customWeights, partGrouping: parseFloat(e.target.value) || 0})}
-            min="0"
-            max="1"
-            step="0.1"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Grain Alignment</label>
-          <input
-            type="number"
-            className="w-full px-2 py-1 border rounded-md text-sm"
-            value={customWeights.grainAlignment}
-            onChange={(e) => setCustomWeights({...customWeights, grainAlignment: parseFloat(e.target.value) || 0})}
-            min="0"
-            max="1"
-            step="0.1"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Inventory Usage</label>
-          <input
-            type="number"
-            className="w-full px-2 py-1 border rounded-md text-sm"
-            value={customWeights.inventoryUsage}
-            onChange={(e) => setCustomWeights({...customWeights, inventoryUsage: parseFloat(e.target.value) || 0})}
-            min="0"
-            max="1"
-            step="0.1"
-          />
-        </div>
-      </div>
-    </div>
-  )}
-</div>
+          <div className="bg-white p-4 rounded-md shadow-md mb-4 relative">
+            {/* NEW: Loading overlay for recalculation */}
+            {isRecalculating && (
+              <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center z-10 rounded-md">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                  <p className="mt-2 text-sm text-gray-600">Recalculating...</p>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">Calculation Plan</h2>
+              <div className="flex items-center gap-4">
+                {/* NEW: Auto-recalculate toggle */}
+                <label className="flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoRecalculate}
+                    onChange={(e) => setAutoRecalculate(e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span className="text-sm text-gray-600">Auto-recalculate</span>
+                </label>
+                
+                {/* Status indicators */}
+                <div className="flex items-center gap-2 text-sm">
+                  {isEditing && currentCalcId && (
+                    <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                      Editing: {planName || 'Untitled'}
+                    </span>
+                  )}
+                  {hasUnsavedChanges && (
+                    <span className="text-orange-600 bg-orange-50 px-2 py-1 rounded flex items-center gap-1">
+                      <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse"></div>
+                      Unsaved
+                    </span>
+                  )}
+                  {isEditing && !hasUnsavedChanges && (
+                    <span className="text-green-600 bg-green-50 px-2 py-1 rounded">
+                      Saved
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Plan Name</label>
+                <input
+                  type="text"
+                  className="w-full px-2 py-1 border rounded-md"
+                  value={planName}
+                  onChange={(e) => setPlanName(e.target.value)}
+                  disabled={isRecalculating}
+                />
+              </div>
+              
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Description</label>
+                <input
+                  type="text"
+                  className="w-full px-2 py-1 border rounded-md"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  disabled={isRecalculating}
+                />
+              </div>
+              
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Kerf Thickness (mm)</label>
+                <input
+                  type="number"
+                  className="w-full px-2 py-1 border rounded-md"
+                  value={kerfThickness}
+                  onChange={(e) => {
+                    setKerfThickness(parseFloat(e.target.value));
+                    debouncedRecalculate(500); // 500ms delay for number inputs
+                  }}
+                  min="0"
+                  disabled={isRecalculating}
+                />
+              </div>
+              
+              {/* Optimization Philosophy Dropdown */}
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Optimization Philosophy</label>
+                <select
+                  className="w-full px-2 py-1 border rounded-md"
+                  value={optimizationPhilosophy}
+                  onChange={(e) => {
+                    const newPhilosophy = e.target.value as OptimizationPhilosophy;
+                    setOptimizationPhilosophy(newPhilosophy);
+                    setCustomWeights(DefaultOptimizationWeights[newPhilosophy]);
+                    setShowCustomWeights(newPhilosophy === OptimizationPhilosophy.MixedOptimization);
+                    debouncedRecalculate(100); // Faster for dropdown
+                  }}
+                  disabled={isRecalculating}
+                >
+                  <option value={OptimizationPhilosophy.MaximumYield}>Maximum Yield</option>
+                  <option value={OptimizationPhilosophy.MinimumCuts}>Minimum Cuts</option>
+                  <option value={OptimizationPhilosophy.GuillotineCutting}>Guillotine Cutting</option>
+                  <option value={OptimizationPhilosophy.PartGrouping}>Part Grouping</option>
+                  <option value={OptimizationPhilosophy.PriorityBased}>Priority Based</option>
+                  <option value={OptimizationPhilosophy.GrainMatching}>Grain Matching</option>
+                  <option value={OptimizationPhilosophy.InventoryManagement}>Inventory Management</option>
+                  <option value={OptimizationPhilosophy.MixedOptimization}>Mixed Optimization</option>
+                </select>
+                <p className="text-xs text-gray-600 mt-1">
+                  {OptimizationPhilosophyDescriptions[optimizationPhilosophy]}
+                </p>
+              </div>
+            </div>
+            
+            {/* Custom Weights Section for Mixed Optimization */}
+            {showCustomWeights && (
+              <div className="mt-4 p-4 bg-gray-50 rounded-md">
+                <h3 className="text-sm font-semibold mb-3">Custom Optimization Weights</h3>
+                <p className="text-xs text-gray-600 mb-3">Adjust the importance of each factor (0-1 scale)</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {Object.entries(customWeights).map(([key, value]) => (
+                    <div key={key}>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        {key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          className="flex-1"
+                          value={value}
+                          onChange={(e) => {
+                            setCustomWeights({
+                              ...customWeights,
+                              [key]: parseFloat(e.target.value)
+                            });
+                            debouncedRecalculate(300); // Debounce slider changes
+                          }}
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          disabled={isRecalculating}
+                        />
+                        <span className="text-sm text-gray-600 w-8">{value.toFixed(1)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           
           {/* Stock and parts management */}
           <div className="bg-white p-4 rounded-md shadow-md mb-4">
@@ -900,6 +934,7 @@ export default function Home() {
                       onChange={(e) => updateStock(index, 'length', e.target.value)}
                       min="0"
                       placeholder="0"
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -912,6 +947,7 @@ export default function Home() {
                       onChange={(e) => updateStock(index, 'width', e.target.value)}
                       min="0"
                       placeholder="0"
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -924,6 +960,7 @@ export default function Home() {
                       onChange={(e) => updateStock(index, 'thickness', e.target.value)}
                       min="0"
                       placeholder="0"
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -936,6 +973,7 @@ export default function Home() {
                       onChange={(e) => updateStock(index, 'quantity', e.target.value)}
                       min="1"
                       placeholder="1"
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -945,6 +983,7 @@ export default function Home() {
                       className="w-full px-2 py-1 border rounded-md"
                       value={stock.materialType || MaterialType.Sheet}
                       onChange={(e) => updateStock(index, 'materialType', e.target.value)}
+                      disabled={isRecalculating}
                     >
                       <option value={MaterialType.Sheet}>Sheet Material</option>
                       <option value={MaterialType.Dimensional}>Dimensional Lumber</option>
@@ -961,6 +1000,7 @@ export default function Home() {
                         "e.g., Oak, Pine, Spruce"}
                       value={stock.material || ''}
                       onChange={(e) => updateStock(index, 'material', e.target.value)}
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -972,6 +1012,7 @@ export default function Home() {
                         className="w-full px-2 py-1 border rounded-md"
                         value={stock.grainDirection || ''}
                         onChange={(e) => updateStock(index, 'grainDirection', e.target.value)}
+                        disabled={isRecalculating}
                       >
                         <option value="">Select Direction</option>
                         <option value="horizontal">Horizontal</option>
@@ -986,6 +1027,7 @@ export default function Home() {
                     type="button" 
                     onClick={() => deleteStock(index)}
                     className="text-xs text-red-500 hover:text-red-700"
+                    disabled={isRecalculating}
                   >
                     Remove
                   </button>
@@ -997,6 +1039,7 @@ export default function Home() {
               <button 
                 onClick={addStock}
                 className="px-4 py-2 bg-green-600 text-white rounded-md shadow-md hover:bg-green-700 transition-colors"
+                disabled={isRecalculating}
               >
                 Add Stock
               </button>
@@ -1015,6 +1058,7 @@ export default function Home() {
                       placeholder={`Part ${index + 1}`}
                       value={part.name || ''}
                       onChange={(e) => updatePart(index, 'name', e.target.value)}
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -1026,6 +1070,7 @@ export default function Home() {
                       value={part.length || ''}
                       onChange={(e) => updatePart(index, 'length', e.target.value)}
                       min="0"
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -1037,6 +1082,7 @@ export default function Home() {
                       value={part.width || ''}
                       onChange={(e) => updatePart(index, 'width', e.target.value)}
                       min="0"
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -1049,6 +1095,7 @@ export default function Home() {
                       onChange={(e) => updatePart(index, 'thickness', e.target.value)}
                       min="0"
                       placeholder="18"
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -1061,6 +1108,7 @@ export default function Home() {
                       onChange={(e) => updatePart(index, 'quantity', e.target.value)}
                       min="1"
                       placeholder="1"
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -1070,6 +1118,7 @@ export default function Home() {
                       className="w-full px-2 py-1 border rounded-md"
                       value={part.materialType || MaterialType.Sheet}
                       onChange={(e) => updatePart(index, 'materialType', e.target.value)}
+                      disabled={isRecalculating}
                     >
                       <option value={MaterialType.Sheet}>Sheet Material</option>
                       <option value={MaterialType.Dimensional}>Dimensional Lumber</option>
@@ -1086,6 +1135,7 @@ export default function Home() {
                         "e.g., Oak, Pine, Spruce"}
                       value={part.material || ''}
                       onChange={(e) => updatePart(index, 'material', e.target.value)}
+                      disabled={isRecalculating}
                     />
                   </div>
                   
@@ -1097,6 +1147,7 @@ export default function Home() {
                         className="w-full px-2 py-1 border rounded-md"
                         value={part.grainDirection || ''}
                         onChange={(e) => updatePart(index, 'grainDirection', e.target.value)}
+                        disabled={isRecalculating}
                       >
                         <option value="">Select Direction</option>
                         <option value="horizontal">Horizontal</option>
@@ -1111,6 +1162,7 @@ export default function Home() {
                     type="button" 
                     onClick={() => deletePart(index)}
                     className="text-xs text-red-500 hover:text-red-700"
+                    disabled={isRecalculating}
                   >
                     Remove
                   </button>
@@ -1122,6 +1174,7 @@ export default function Home() {
               <button 
                 onClick={addPart}
                 className="px-4 py-2 bg-green-600 text-white rounded-md shadow-md hover:bg-green-700 transition-colors"
+                disabled={isRecalculating}
               >
                 Add Part
               </button>
@@ -1131,10 +1184,10 @@ export default function Home() {
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-200">
               <button 
                 onClick={calculateOptimalCuts}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-md hover:bg-blue-700 transition-colors"
-                disabled={isLoading}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-md hover:bg-blue-700 transition-colors disabled:bg-gray-400"
+                disabled={isLoading || isRecalculating}
               >
-                {isLoading ? 'Calculating...' : 'Calculate Cuts'}
+                {isLoading ? 'Calculating...' : isRecalculating ? 'Auto-recalculating...' : 'Calculate Cuts'}
               </button>
               
               <button 
@@ -1144,7 +1197,7 @@ export default function Home() {
                     ? 'bg-orange-600 hover:bg-orange-700' 
                     : 'bg-green-600 hover:bg-green-700'
                 }`}
-                disabled={!results || !results.success}
+                disabled={!results || !results.success || isRecalculating}
               >
                 {hasUnsavedChanges && (
                   <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
