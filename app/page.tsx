@@ -20,7 +20,11 @@ import {
   Results,
   MaterialType,
   formatDimensions,
-  createDimensionKey
+  createDimensionKey,
+  OptimizationPhilosophy,           // Add this
+  OptimizationPhilosophyDescriptions, // Add this
+  OptimizationWeights,               // Add this
+  DefaultOptimizationWeights         // Add this
 } from "./lib/types";
 import { calculateOptimalCuts as calculateOptimalCutsExternal } from "./lib/cutting-engine";
 
@@ -87,6 +91,9 @@ export default function Home() {
   const [resultsAreFreshForDeduction, setResultsAreFreshForDeduction] = useState(false);
   const [cutStatus, setCutStatus] = useState<{ [placementKey: string]: boolean }>({});
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [optimizationPhilosophy, setOptimizationPhilosophy] = useState<OptimizationPhilosophy>(OptimizationPhilosophy.MaximumYield);
+  const [customWeights, setCustomWeights] = useState<OptimizationWeights>(DefaultOptimizationWeights[OptimizationPhilosophy.MaximumYield]);
+  const [showCustomWeights, setShowCustomWeights] = useState(false);
 
   // Load saved calculations and warehouse stock from database on component mount
   useEffect(() => {
@@ -123,26 +130,27 @@ export default function Home() {
 
   // Track unsaved changes - mark as unsaved when form data changes
   useEffect(() => {
-    if (isEditing && currentCalcId) {
-      const currentCalculation = savedCalculations.find(calc => calc.id === currentCalcId);
-      if (currentCalculation) {
-        const hasFormChanges = 
-          planName !== currentCalculation.name ||
-          description !== (currentCalculation.description || "") ||
-          kerfThickness !== currentCalculation.kerfThickness ||
-          JSON.stringify(availableStocks) !== JSON.stringify(currentCalculation.availableStocks) ||
-          JSON.stringify(requiredParts) !== JSON.stringify(currentCalculation.requiredParts) ||
-          JSON.stringify(results) !== JSON.stringify(currentCalculation.results);
-        
-        setHasUnsavedChanges(hasFormChanges);
-      }
-    } else if (!isEditing && (planName || description || kerfThickness || availableStocks.length > 0 || requiredParts.length > 0)) {
-      setHasUnsavedChanges(true);
-    } else {
-      setHasUnsavedChanges(false);
+  if (isEditing && currentCalcId) {
+    const currentCalculation = savedCalculations.find(calc => calc.id === currentCalcId);
+    if (currentCalculation) {
+      const hasFormChanges = 
+        planName !== currentCalculation.name ||
+        description !== (currentCalculation.description || "") ||
+        kerfThickness !== currentCalculation.kerfThickness ||
+        optimizationPhilosophy !== (currentCalculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield) || // Add this
+        JSON.stringify(customWeights) !== JSON.stringify(currentCalculation.customWeights || DefaultOptimizationWeights[currentCalculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield]) || // Add this
+        JSON.stringify(availableStocks) !== JSON.stringify(currentCalculation.availableStocks) ||
+        JSON.stringify(requiredParts) !== JSON.stringify(currentCalculation.requiredParts) ||
+        JSON.stringify(results) !== JSON.stringify(currentCalculation.results);
+      
+      setHasUnsavedChanges(hasFormChanges);
     }
-  }, [planName, description, kerfThickness, availableStocks, requiredParts, results, isEditing, currentCalcId, savedCalculations]);
-
+  } else if (!isEditing && (planName || description || kerfThickness || availableStocks.length > 0 || requiredParts.length > 0)) {
+    setHasUnsavedChanges(true);
+  } else {
+    setHasUnsavedChanges(false);
+  }
+}, [planName, description, kerfThickness, optimizationPhilosophy, customWeights, availableStocks, requiredParts, results, isEditing, currentCalcId, savedCalculations]); // Add optimizationPhilosophy and customWeights to dependencies
   // Add browser warning for unsaved changes
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -180,6 +188,9 @@ export default function Home() {
     setPlanName("");
     setDescription("");
     setKerfThickness(0);
+    setOptimizationPhilosophy(OptimizationPhilosophy.MaximumYield);    // Add this
+  setCustomWeights(DefaultOptimizationWeights[OptimizationPhilosophy.MaximumYield]); // Add this
+  setShowCustomWeights(false);                                        // Add this
     setAvailableStocks([]);
     setRequiredParts([]);
     setResults(null);
@@ -364,84 +375,93 @@ export default function Home() {
   };
 
   const calculateOptimalCuts = () => {
-    const fixedStocks = availableStocks.map(stock => ({
-      ...stock,
-      materialType: (stock.materialType as any) === 'Sheet Material' ? MaterialType.Sheet : 
-                   (stock.materialType as any) === 'Dimensional Lumber' ? MaterialType.Dimensional : 
-                   stock.materialType
-    }));
+  const fixedStocks = availableStocks.map(stock => ({
+    ...stock,
+    materialType: (stock.materialType as any) === 'Sheet Material' ? MaterialType.Sheet : 
+                 (stock.materialType as any) === 'Dimensional Lumber' ? MaterialType.Dimensional : 
+                 stock.materialType
+  }));
+  
+  const fixedParts = requiredParts.map(part => ({
+    ...part,
+    materialType: (part.materialType as any) === 'Sheet Material' ? MaterialType.Sheet : 
+                 (part.materialType as any) === 'Dimensional Lumber' ? MaterialType.Dimensional : 
+                 part.materialType
+  }));
+  
+  if (JSON.stringify(fixedStocks) !== JSON.stringify(availableStocks)) {
+    setAvailableStocks(fixedStocks);
+  }
+  
+  if (JSON.stringify(fixedParts) !== JSON.stringify(requiredParts)) {
+    setRequiredParts(fixedParts);
+  }
+  
+  if (!validateInputs()) {
+    return;
+  }
+  
+  setCutStatus({});
+  setIsLoading(true);
+  setResultsAreFreshForDeduction(false); 
+  
+  try {
+    // Update this line to pass optimization parameters
+    const results = calculateOptimalCutsExternal(
+      fixedStocks, 
+      fixedParts, 
+      kerfThickness,
+      optimizationPhilosophy,  // Add this
+      optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization ? customWeights : undefined // Add this
+    );
     
-    const fixedParts = requiredParts.map(part => ({
-      ...part,
-      materialType: (part.materialType as any) === 'Sheet Material' ? MaterialType.Sheet : 
-                   (part.materialType as any) === 'Dimensional Lumber' ? MaterialType.Dimensional : 
-                   part.materialType
-    }));
-    
-    if (JSON.stringify(fixedStocks) !== JSON.stringify(availableStocks)) {
-      setAvailableStocks(fixedStocks);
-    }
-    
-    if (JSON.stringify(fixedParts) !== JSON.stringify(requiredParts)) {
-      setRequiredParts(fixedParts);
-    }
-    
-    if (!validateInputs()) {
-      return;
-    }
-    
-    setCutStatus({});
-    setIsLoading(true);
-    setResultsAreFreshForDeduction(false); 
-    
-    try {
-      const results = calculateOptimalCutsExternal(fixedStocks, fixedParts, kerfThickness);
-      
-      if (results.success) {
-        setResults(results);
-        setErrorMessage(null);
+    if (results.success) {
+      setResults(results);
+      setErrorMessage(null);
 
-        if (useWarehouseStock && results.stockUsage && results.stockUsage.length > 0) {
-          setResultsAreFreshForDeduction(true);
-        }
-      } else {
-        setErrorMessage(results.message || "Calculation failed");
-        setResults(null);
-        setResultsAreFreshForDeduction(false);
+      if (useWarehouseStock && results.stockUsage && results.stockUsage.length > 0) {
+        setResultsAreFreshForDeduction(true);
       }
-
-    } catch (error: any) {
-      console.error("Error calculating cuts:", error);
-      setErrorMessage(error.message || "An error occurred during calculation");
-      setResults(null); 
+    } else {
+      setErrorMessage(results.message || "Calculation failed");
+      setResults(null);
       setResultsAreFreshForDeduction(false);
-    } finally {
-      setIsLoading(false);
     }
-  };
+
+  } catch (error: any) {
+    console.error("Error calculating cuts:", error);
+    setErrorMessage(error.message || "An error occurred during calculation");
+    setResults(null); 
+    setResultsAreFreshForDeduction(false);
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   const saveCalculation = async () => {
-    if (!validateInputs()) {
-      return;
-    }
+  if (!validateInputs()) {
+    return;
+  }
 
-    setIsLoading(true);
-    let calculationSavedSuccessfully = false;
+  setIsLoading(true);
+  let calculationSavedSuccessfully = false;
+  
+  try {
+    const timestamp = Date.now();
     
-    try {
-      const timestamp = Date.now();
-      
-      const calculationToSave: SavedCalculation = {
-        id: currentCalcId || `calc-${timestamp}`,
-        name: planName,
-        description,
-        kerfThickness,
-        availableStocks,
-        requiredParts,
-        results, 
-        dateCreated: isEditing && currentCalcId ? (savedCalculations.find(c => c.id === currentCalcId)?.dateCreated || timestamp) : timestamp,
-        dateModified: timestamp
-      };
+    const calculationToSave: SavedCalculation = {
+      id: currentCalcId || `calc-${timestamp}`,
+      name: planName,
+      description,
+      kerfThickness,
+      optimizationPhilosophy,     // Add this
+      customWeights: optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization ? customWeights : undefined, // Add this
+      availableStocks,
+      requiredParts,
+      results, 
+      dateCreated: isEditing && currentCalcId ? (savedCalculations.find(c => c.id === currentCalcId)?.dateCreated || timestamp) : timestamp,
+      dateModified: timestamp
+    };
 
       if (isEditing && currentCalcId) {
         const success = await updateCalculation(calculationToSave);
@@ -533,30 +553,33 @@ export default function Home() {
   };
 
   const loadCalculation = (id: string) => {
-    if (hasUnsavedChanges) {
-      const confirmed = confirm("You have unsaved changes. Loading a new calculation will discard them. Are you sure?");
-      if (!confirmed) return;
-    }
-    
-    const calculation = savedCalculations.find(calc => calc.id === id);
-    if (!calculation) {
-      alert("Calculation not found.");
-      return;
-    }
+  if (hasUnsavedChanges) {
+    const confirmed = confirm("You have unsaved changes. Loading a new calculation will discard them. Are you sure?");
+    if (!confirmed) return;
+  }
+  
+  const calculation = savedCalculations.find(calc => calc.id === id);
+  if (!calculation) {
+    alert("Calculation not found.");
+    return;
+  }
 
-    setPlanName(calculation.name);
-    setDescription(calculation.description || "");
-    setKerfThickness(calculation.kerfThickness);
-    setAvailableStocks(JSON.parse(JSON.stringify(calculation.availableStocks)));
-    setRequiredParts(JSON.parse(JSON.stringify(calculation.requiredParts)));
-    setResults(calculation.results ? JSON.parse(JSON.stringify(calculation.results)) : null);
-    setCurrentCalcId(calculation.id);
-    setIsEditing(true);
-    setErrorMessage(null);
-    setResultsAreFreshForDeduction(false); 
-    setUseWarehouseStock(calculation.availableStocks.some(s => s.id));
-    setHasUnsavedChanges(false);
-  };
+  setPlanName(calculation.name);
+  setDescription(calculation.description || "");
+  setKerfThickness(calculation.kerfThickness);
+  setOptimizationPhilosophy(calculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield); // Add this
+  setCustomWeights(calculation.customWeights || DefaultOptimizationWeights[calculation.optimizationPhilosophy || OptimizationPhilosophy.MaximumYield]); // Add this
+  setShowCustomWeights(calculation.optimizationPhilosophy === OptimizationPhilosophy.MixedOptimization); // Add this
+  setAvailableStocks(JSON.parse(JSON.stringify(calculation.availableStocks)));
+  setRequiredParts(JSON.parse(JSON.stringify(calculation.requiredParts)));
+  setResults(calculation.results ? JSON.parse(JSON.stringify(calculation.results)) : null);
+  setCurrentCalcId(calculation.id);
+  setIsEditing(true);
+  setErrorMessage(null);
+  setResultsAreFreshForDeduction(false); 
+  setUseWarehouseStock(calculation.availableStocks.some(s => s.id));
+  setHasUnsavedChanges(false);
+};
 
   const deleteSavedCalculation = async (id: string) => {
     if (!confirm("Are you sure you want to delete this calculation?")) {
@@ -697,60 +720,157 @@ export default function Home() {
 
           {/* Calculation plan form */}
           <div className="bg-white p-4 rounded-md shadow-md mb-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Calculation Plan</h2>
-              <div className="flex items-center gap-2 text-sm">
-                {isEditing && currentCalcId && (
-                  <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded">
-                    Editing: {planName || 'Untitled'}
-                  </span>
-                )}
-                {hasUnsavedChanges && (
-                  <span className="text-orange-600 bg-orange-50 px-2 py-1 rounded flex items-center gap-1">
-                    <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse"></div>
-                    Unsaved
-                  </span>
-                )}
-                {isEditing && !hasUnsavedChanges && (
-                  <span className="text-green-600 bg-green-50 px-2 py-1 rounded">
-                    Saved
-                  </span>
-                )}
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Plan Name</label>
-                <input
-                  type="text"
-                  className="w-full px-2 py-1 border rounded-md"
-                  value={planName}
-                  onChange={(e) => setPlanName(e.target.value)}
-                />
-              </div>
-              
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Description</label>
-                <input
-                  type="text"
-                  className="w-full px-2 py-1 border rounded-md"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </div>
-              
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Kerf Thickness (mm)</label>
-                <input
-                  type="number"
-                  className="w-full px-2 py-1 border rounded-md"
-                  value={kerfThickness}
-                  onChange={(e) => setKerfThickness(parseFloat(e.target.value))}
-                  min="0"
-                />
-              </div>
-            </div>
-          </div>
+  <div className="flex items-center justify-between mb-4">
+    <h2 className="text-xl font-semibold">Calculation Plan</h2>
+    <div className="flex items-center gap-2 text-sm">
+      {isEditing && currentCalcId && (
+        <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded">
+          Editing: {planName || 'Untitled'}
+        </span>
+      )}
+      {hasUnsavedChanges && (
+        <span className="text-orange-600 bg-orange-50 px-2 py-1 rounded flex items-center gap-1">
+          <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse"></div>
+          Unsaved
+        </span>
+      )}
+      {isEditing && !hasUnsavedChanges && (
+        <span className="text-green-600 bg-green-50 px-2 py-1 rounded">
+          Saved
+        </span>
+      )}
+    </div>
+  </div>
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div>
+      <label className="block text-xs text-gray-500 mb-1">Plan Name</label>
+      <input
+        type="text"
+        className="w-full px-2 py-1 border rounded-md"
+        value={planName}
+        onChange={(e) => setPlanName(e.target.value)}
+      />
+    </div>
+    
+    <div>
+      <label className="block text-xs text-gray-500 mb-1">Description</label>
+      <input
+        type="text"
+        className="w-full px-2 py-1 border rounded-md"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+      />
+    </div>
+    
+    <div>
+      <label className="block text-xs text-gray-500 mb-1">Kerf Thickness (mm)</label>
+      <input
+        type="number"
+        className="w-full px-2 py-1 border rounded-md"
+        value={kerfThickness}
+        onChange={(e) => setKerfThickness(parseFloat(e.target.value))}
+        min="0"
+      />
+    </div>
+    
+    {/* NEW: Optimization Philosophy Dropdown */}
+    <div>
+      <label className="block text-xs text-gray-500 mb-1">Optimization Philosophy</label>
+      <select
+        className="w-full px-2 py-1 border rounded-md"
+        value={optimizationPhilosophy}
+        onChange={(e) => {
+          const newPhilosophy = e.target.value as OptimizationPhilosophy;
+          setOptimizationPhilosophy(newPhilosophy);
+          setCustomWeights(DefaultOptimizationWeights[newPhilosophy]);
+          setShowCustomWeights(newPhilosophy === OptimizationPhilosophy.MixedOptimization);
+        }}
+      >
+        <option value={OptimizationPhilosophy.MaximumYield}>Maximum Yield</option>
+        <option value={OptimizationPhilosophy.MinimumCuts}>Minimum Cuts</option>
+        <option value={OptimizationPhilosophy.GuillotineCutting}>Guillotine Cutting</option>
+        <option value={OptimizationPhilosophy.PartGrouping}>Part Grouping</option>
+        <option value={OptimizationPhilosophy.PriorityBased}>Priority Based</option>
+        <option value={OptimizationPhilosophy.GrainMatching}>Grain Matching</option>
+        <option value={OptimizationPhilosophy.InventoryManagement}>Inventory Management</option>
+        <option value={OptimizationPhilosophy.MixedOptimization}>Mixed Optimization</option>
+      </select>
+      <p className="text-xs text-gray-600 mt-1">
+        {OptimizationPhilosophyDescriptions[optimizationPhilosophy]}
+      </p>
+    </div>
+  </div>
+  
+  {/* NEW: Custom Weights Section for Mixed Optimization */}
+  {showCustomWeights && (
+    <div className="mt-4 p-4 bg-gray-50 rounded-md">
+      <h3 className="text-sm font-semibold mb-3">Custom Optimization Weights</h3>
+      <p className="text-xs text-gray-600 mb-3">Adjust the importance of each factor (0-1 scale)</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Material Efficiency</label>
+          <input
+            type="number"
+            className="w-full px-2 py-1 border rounded-md text-sm"
+            value={customWeights.materialEfficiency}
+            onChange={(e) => setCustomWeights({...customWeights, materialEfficiency: parseFloat(e.target.value) || 0})}
+            min="0"
+            max="1"
+            step="0.1"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Cutting Simplicity</label>
+          <input
+            type="number"
+            className="w-full px-2 py-1 border rounded-md text-sm"
+            value={customWeights.cuttingSimplicity}
+            onChange={(e) => setCustomWeights({...customWeights, cuttingSimplicity: parseFloat(e.target.value) || 0})}
+            min="0"
+            max="1"
+            step="0.1"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Part Grouping</label>
+          <input
+            type="number"
+            className="w-full px-2 py-1 border rounded-md text-sm"
+            value={customWeights.partGrouping}
+            onChange={(e) => setCustomWeights({...customWeights, partGrouping: parseFloat(e.target.value) || 0})}
+            min="0"
+            max="1"
+            step="0.1"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Grain Alignment</label>
+          <input
+            type="number"
+            className="w-full px-2 py-1 border rounded-md text-sm"
+            value={customWeights.grainAlignment}
+            onChange={(e) => setCustomWeights({...customWeights, grainAlignment: parseFloat(e.target.value) || 0})}
+            min="0"
+            max="1"
+            step="0.1"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Inventory Usage</label>
+          <input
+            type="number"
+            className="w-full px-2 py-1 border rounded-md text-sm"
+            value={customWeights.inventoryUsage}
+            onChange={(e) => setCustomWeights({...customWeights, inventoryUsage: parseFloat(e.target.value) || 0})}
+            min="0"
+            max="1"
+            step="0.1"
+          />
+        </div>
+      </div>
+    </div>
+  )}
+</div>
           
           {/* Stock and parts management */}
           <div className="bg-white p-4 rounded-md shadow-md mb-4">
@@ -1110,12 +1230,24 @@ export default function Home() {
                     </div>
 
                     {/* Visual Diagram */}
-                    <div className="bg-white rounded-lg p-4 border-2 border-gray-300 overflow-auto">
+                    <div className="bg-white rounded-lg p-4 border-2 border-gray-300 overflow-hidden">
                       <svg
                         width={scaledWidth + 40}
                         height={scaledHeight + 40}
                         className="border border-gray-400"
                       >
+                        {/* Define clip path to prevent overflow */}
+                        <defs>
+                          <clipPath id={`sheet-clip-${index}`}>
+                            <rect
+                              x={20}
+                              y={20}
+                              width={scaledWidth}
+                              height={scaledHeight}
+                            />
+                          </clipPath>
+                        </defs>
+                        
                         {/* Sheet outline */}
                         <rect
                           x={20}
@@ -1129,7 +1261,7 @@ export default function Home() {
                         
                         {/* Grain direction indicator */}
                         {stock.materialType === MaterialType.Sheet && stock.grainDirection && (
-                          <g>
+                          <g clipPath={`url(#sheet-clip-${index})`}>
                             {stock.grainDirection === 'horizontal' ? (
                               Array.from({length: Math.floor(scaledHeight / 20)}, (_, i) => (
                                 <line
@@ -1160,56 +1292,58 @@ export default function Home() {
                           </g>
                         )}
                         
-                        {/* Part placements */}
-                        {usage.placements.map((placement, pIndex) => {
-                          const partIndex = parseInt(placement.partId.split('-')[1]) || 0;
-                          const part = requiredParts[partIndex] || requiredParts[0];
-                          const partWidth = placement.rotated ? part.width : part.length;
-                          const partHeight = placement.rotated ? part.length : part.width;
-                          const color = getPartColor(partIndex);
-                          const placementKey = generatePlacementKey(placement, index);
-                          const isCut = cutStatus[placementKey] || false;
-                          
-                          return (
-                            <g key={pIndex}>
-                              <rect
-                                x={20 + placement.x * scale}
-                                y={20 + placement.y * scale}
-                                width={partWidth * scale}
-                                height={partHeight * scale}
-                                fill={isCut ? '#d4edda' : color.hexBg}
-                                stroke={isCut ? '#28a745' : color.hexBorder}
-                                strokeWidth="2"
-                                className="cursor-pointer transition-all duration-200"
-                                onClick={() => toggleCutStatus(placementKey)}
-                              />
-                              <text
-                                x={20 + (placement.x + partWidth/2) * scale}
-                                y={20 + (placement.y + partHeight/2) * scale}
-                                textAnchor="middle"
-                                dominantBaseline="middle"
-                                fontSize="10"
-                                fill={isCut ? '#155724' : '#000'}
-                                className="pointer-events-none select-none"
-                              >
-                                {part.name || `P${partIndex + 1}`}
-                              </text>
-                              {placement.rotated && (
+                        {/* Part placements - CLIPPED to sheet bounds */}
+                        <g clipPath={`url(#sheet-clip-${index})`}>
+                          {usage.placements.map((placement, pIndex) => {
+                            const partIndex = parseInt(placement.partId.split('-')[1]) || 0;
+                            const part = requiredParts[partIndex] || requiredParts[0];
+                            const partWidth = placement.rotated ? part.width : part.length;
+                            const partHeight = placement.rotated ? part.length : part.width;
+                            const color = getPartColor(partIndex);
+                            const placementKey = generatePlacementKey(placement, index);
+                            const isCut = cutStatus[placementKey] || false;
+                            
+                            return (
+                              <g key={pIndex}>
+                                <rect
+                                  x={20 + placement.x * scale}
+                                  y={20 + placement.y * scale}
+                                  width={partWidth * scale}
+                                  height={partHeight * scale}
+                                  fill={isCut ? '#d4edda' : color.hexBg}
+                                  stroke={isCut ? '#28a745' : color.hexBorder}
+                                  strokeWidth="2"
+                                  className="cursor-pointer transition-all duration-200"
+                                  onClick={() => toggleCutStatus(placementKey)}
+                                />
                                 <text
                                   x={20 + (placement.x + partWidth/2) * scale}
-                                  y={20 + (placement.y + partHeight/2 + 8) * scale}
+                                  y={20 + (placement.y + partHeight/2) * scale}
                                   textAnchor="middle"
                                   dominantBaseline="middle"
-                                  fontSize="8"
-                                  fill={isCut ? '#155724' : '#666'}
+                                  fontSize="10"
+                                  fill={isCut ? '#155724' : '#000'}
                                   className="pointer-events-none select-none"
                                 >
-                                  ↻
+                                  {part.name || `P${partIndex + 1}`}
                                 </text>
-                              )}
-                            </g>
-                          );
-                        })}
+                                {placement.rotated && (
+                                  <text
+                                    x={20 + (placement.x + partWidth/2) * scale}
+                                    y={20 + (placement.y + partHeight/2 + 8) * scale}
+                                    textAnchor="middle"
+                                    dominantBaseline="middle"
+                                    fontSize="8"
+                                    fill={isCut ? '#155724' : '#666'}
+                                    className="pointer-events-none select-none"
+                                  >
+                                    ↻
+                                  </text>
+                                )}
+                              </g>
+                            );
+                          })}
+                        </g>
                         
                         {/* Dimensions */}
                         <text x={scaledWidth/2 + 20} y={15} textAnchor="middle" fontSize="12" fill="#666">
@@ -1220,7 +1354,6 @@ export default function Home() {
                         </text>
                       </svg>
                     </div>
-
                     {/* Cut Progress Tracker */}
                     <div className="mt-4">
                       <div className="flex items-center justify-between mb-2">
@@ -1238,6 +1371,31 @@ export default function Home() {
                         ></div>
                       </div>
                     </div>
+
+                    {/* Warning if parts exceed bounds */}
+                    {usage.placements.some(placement => {
+                      const partIndex = parseInt(placement.partId.split('-')[1]) || 0;
+                      const part = requiredParts[partIndex];
+                      if (!part) return false;
+                      const partWidth = placement.rotated ? part.width : part.length;
+                      const partHeight = placement.rotated ? part.length : part.width;
+                      return placement.x + partWidth > stock.length || placement.y + partHeight > stock.width;
+                    }) && (
+                      <div className="mt-3 p-3 bg-yellow-50 border border-yellow-400 rounded-md">
+                        <div className="flex items-start">
+                          <svg className="w-5 h-5 text-yellow-600 mr-2 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                          <div>
+                            <h4 className="text-sm font-medium text-yellow-800">Layout Warning</h4>
+                            <p className="text-sm text-yellow-700 mt-1">
+                              Some parts appear to extend beyond sheet boundaries. This may be due to the optimization algorithm. 
+                              Try switching to "Maximum Yield" optimization or reducing the kerf thickness.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Parts List */}
                     <div className="mt-4">

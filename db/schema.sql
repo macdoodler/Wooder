@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS calculations (
   name TEXT NOT NULL,
   description TEXT,
   kerf_thickness REAL NOT NULL,
+  optimization_philosophy TEXT DEFAULT 'maximum_yield',  -- Add this
+  custom_weights TEXT,                                    -- Add this
   available_stocks TEXT NOT NULL, -- JSON string of stock objects
   required_parts TEXT NOT NULL,   -- JSON string of part objects
   results TEXT,                   -- JSON string of results or NULL
