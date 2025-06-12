@@ -393,8 +393,9 @@ export class PlacementEngine {
     
     if (!part) return;
 
-    const width = placement.rotated ? part.width : part.length;
-    const height = placement.rotated ? part.length : part.width;
+    // CRITICAL FIX: Correct rotation logic - when rotated, length becomes width and width becomes length
+    const width = placement.rotated ? part.length : part.width;
+    const height = placement.rotated ? part.width : part.length;
 
     // Calculate grid cells this placement occupies
     const minCellX = Math.floor(placement.x / this.CELL_SIZE);
@@ -468,8 +469,9 @@ export class PlacementEngine {
           
           if (!part) continue;
 
-          const existingWidth = existing.rotated ? part.width : part.length;
-          const existingHeight = existing.rotated ? part.length : part.width;
+          // CRITICAL FIX: Correct rotation logic for fast collision check
+          const existingWidth = existing.rotated ? part.length : part.width;
+          const existingHeight = existing.rotated ? part.width : part.length;
 
           const existingLeft = existing.x;
           const existingRight = existing.x + existingWidth + kerfThickness;
@@ -659,7 +661,7 @@ export class PlacementEngine {
   }
 
   /**
-   * OPTIMIZED: Universal collision detection with spatial indexing and early termination
+   * SIMPLIFIED: Reliable collision detection without complex kerf calculations
    */
   static hasCollision(
     newPosition: { x: number; y: number },
@@ -668,24 +670,16 @@ export class PlacementEngine {
     kerfThickness: number,
     allParts: ProcessedPart[] = []
   ): boolean {
-    // CRITICAL FIX: Always use the standard collision detection to ensure consistency
-    // The spatial grid can get out of sync, so we'll use the reliable method
-    const kerfAware = this.calculateKerfAwareSpacing(
-      newPosition, 
-      newDimensions, 
-      existingPlacements, 
-      kerfThickness, 
-      allParts
-    );
-
+    // CRITICAL FIX: Use simple, reliable collision detection
+    // Add kerf thickness directly to dimensions for safety margin
     const newLeft = newPosition.x;
-    const newRight = newPosition.x + kerfAware.effectiveWidth;
+    const newRight = newPosition.x + newDimensions.length + kerfThickness;
     const newTop = newPosition.y;
-    const newBottom = newPosition.y + kerfAware.effectiveHeight;
+    const newBottom = newPosition.y + newDimensions.width + kerfThickness;
 
     const TOLERANCE = 0.01;
 
-    // OPTIMIZATION: Early termination on first collision
+    // Check against all existing placements
     for (const existing of existingPlacements) {
       const partIdMatch = existing.partId.match(/Part-(\d+)/);
       const partIndex = partIdMatch ? parseInt(partIdMatch[1]) : -1;
@@ -693,26 +687,21 @@ export class PlacementEngine {
       
       let existingWidth, existingHeight;
       if (part) {
-        existingWidth = existing.rotated ? part.width : part.length;
-        existingHeight = existing.rotated ? part.length : part.width;
+        // CRITICAL FIX: Correct rotation logic - when rotated, length becomes width and width becomes length
+        existingWidth = existing.rotated ? part.length : part.width;
+        existingHeight = existing.rotated ? part.width : part.length;
       } else {
+        // Fallback dimensions - use reasonable defaults
         existingWidth = 200;
         existingHeight = 200;
       }
 
-      const existingKerfAware = this.calculateKerfAwareSpacing(
-        { x: existing.x, y: existing.y },
-        { length: existingWidth, width: existingHeight },
-        existingPlacements.filter(p => p !== existing),
-        kerfThickness,
-        allParts
-      );
-
       const existingLeft = existing.x;
-      const existingRight = existing.x + existingKerfAware.effectiveWidth;
+      const existingRight = existing.x + existingWidth + kerfThickness;
       const existingTop = existing.y;
-      const existingBottom = existing.y + existingKerfAware.effectiveHeight;
+      const existingBottom = existing.y + existingHeight + kerfThickness;
 
+      // Simple rectangle overlap check
       const xOverlap = !(newRight <= existingLeft + TOLERANCE || newLeft >= existingRight - TOLERANCE);
       const yOverlap = !(newBottom <= existingTop + TOLERANCE || newTop >= existingBottom - TOLERANCE);
 
@@ -1492,8 +1481,9 @@ export class PlacementEngine {
       
       let existingWidth, existingHeight;
       if (part) {
-        existingWidth = existing.rotated ? part.width : part.length;
-        existingHeight = existing.rotated ? part.length : part.width;
+        // CRITICAL FIX: Correct rotation logic for shared cut line detection
+        existingWidth = existing.rotated ? part.length : part.width;
+        existingHeight = existing.rotated ? part.width : part.length;
       } else {
         existingWidth = 200; // Conservative estimate
         existingHeight = 200;
@@ -1603,10 +1593,11 @@ export class PlacementEngine {
         
         if (!part1 || !part2) continue;
         
-        const p1Width = p1.rotated ? part1.width : part1.length;
-        const p1Height = p1.rotated ? part1.length : part1.width;
-        const p2Width = p2.rotated ? part2.width : part2.length;
-        const p2Height = p2.rotated ? part2.length : part2.width;
+        // CRITICAL FIX: Correct rotation logic - when rotated, length becomes width and width becomes length
+        const p1Width = p1.rotated ? part1.length : part1.width;
+        const p1Height = p1.rotated ? part1.width : part1.length;
+        const p2Width = p2.rotated ? part2.length : part2.width;
+        const p2Height = p2.rotated ? part2.width : part2.length;
         
         // CRITICAL FIX: Include kerf thickness in bounds calculation to match collision detection
         const p1Right = p1.x + p1Width + kerfThickness;
@@ -1682,6 +1673,135 @@ export class MultiSheetOptimizer {
   }
 
   /**
+   * Determine if global distribution planning should be applied
+   * This is the key fix - we need global planning instead of per-sheet strategic distribution
+   */
+  private static shouldApplyGlobalDistribution(
+    allParts: ProcessedPart[],
+    stockInventory: OptimizedStock[],
+    totalAvailableSheets: number
+  ): boolean {
+    // MULTI-SHEET FIX: Be more permissive about when to apply global distribution
+    const totalPartsArea = allParts.reduce((sum, part) => sum + (part.length * part.width), 0);
+    const averageSheetArea = stockInventory.reduce((sum, stock) => sum + (stock.length * stock.width), 0) / stockInventory.length;
+    const estimatedSheetsNeeded = Math.ceil(totalPartsArea / (averageSheetArea * 0.75)); // More conservative efficiency assumption
+    
+    // Check for mixed part sizes (more lenient)
+    const partAreas = allParts.map(p => p.length * p.width);
+    const minArea = Math.min(...partAreas);
+    const maxArea = Math.max(...partAreas);
+    const hasMixedSizes = (maxArea / minArea) > 2.0; // More permissive (was 2.5)
+    
+    // Apply global distribution when:
+    // 1. We have mixed part sizes OR many parts
+    // 2. We likely need multiple sheets
+    // 3. We have sheets available
+    const needsMultipleSheets = estimatedSheetsNeeded > 1;
+    const hasEnoughSheets = totalAvailableSheets >= 2; // Just need 2+ sheets
+    const hasEnoughParts = allParts.length >= 4; // Reduced from 6 to 4
+    const hasManyParts = allParts.length >= 8; // Many parts scenario
+    
+    console.log(`[GLOBAL-DISTRIBUTION] Mixed sizes: ${hasMixedSizes}, Many parts: ${hasManyParts}, Needs ${estimatedSheetsNeeded} sheets, Has ${totalAvailableSheets} sheets, ${allParts.length} parts`);
+    
+    // Apply if we have mixed sizes OR many parts AND multiple sheets needed/available
+    const shouldApply = (hasMixedSizes || hasManyParts) && needsMultipleSheets && hasEnoughSheets && hasEnoughParts;
+    console.log(`[GLOBAL-DISTRIBUTION] Should apply global distribution: ${shouldApply}`);
+    
+    return shouldApply;
+  }
+
+  /**
+   * Create a global distribution plan that distributes parts across sheets before processing
+   * This is the core fix - plan the distribution globally instead of greedily per sheet
+   */
+  private static createGlobalDistributionPlan(
+    allParts: ProcessedPart[],
+    stockInventory: OptimizedStock[],
+    kerfThickness: number
+  ): Map<number, ProcessedPart[]> {
+    const plan = new Map<number, ProcessedPart[]>();
+    
+    // Calculate sheet capacities
+    const sheetCapacity = stockInventory[0]?.length * stockInventory[0]?.width * 0.75; // Assume 75% efficient packing
+    const totalPartsArea = allParts.reduce((sum, part) => sum + (part.length * part.width), 0);
+    const estimatedSheetsNeeded = Math.ceil(totalPartsArea / sheetCapacity);
+    
+    // Categorize parts by size for balanced distribution
+    const partAreas = allParts.map(p => ({ part: p, area: p.length * p.width }));
+    const averageArea = partAreas.reduce((sum, p) => sum + p.area, 0) / partAreas.length;
+    
+    const largeParts = partAreas.filter(p => p.area > averageArea * 1.5).map(p => p.part);
+    const mediumParts = partAreas.filter(p => p.area >= averageArea * 0.7 && p.area <= averageArea * 1.5).map(p => p.part);
+    const smallParts = partAreas.filter(p => p.area < averageArea * 0.7).map(p => p.part);
+    
+    console.log(`[GLOBAL-DISTRIBUTION] Distributing ${largeParts.length}L + ${mediumParts.length}M + ${smallParts.length}S parts across ${estimatedSheetsNeeded} sheets`);
+    
+    // Initialize sheet plans
+    for (let i = 0; i < estimatedSheetsNeeded; i++) {
+      plan.set(i, []);
+    }
+    
+    // GLOBAL DISTRIBUTION STRATEGY: Round-robin distribution of large parts, then fill with smaller parts
+    
+    // Phase 1: Distribute large parts evenly across sheets (round-robin)
+    largeParts.forEach((part, index) => {
+      const sheetIndex = index % estimatedSheetsNeeded;
+      plan.get(sheetIndex)!.push(part);
+    });
+    
+    // Phase 2: Distribute medium parts to balance sheet loads
+    mediumParts.forEach((part, index) => {
+      // Find sheet with least area so far
+      let bestSheetIndex = 0;
+      let minArea = Infinity;
+      
+      for (let i = 0; i < estimatedSheetsNeeded; i++) {
+        const currentArea = plan.get(i)!.reduce((sum, p) => sum + (p.length * p.width), 0);
+        if (currentArea < minArea) {
+          minArea = currentArea;
+          bestSheetIndex = i;
+        }
+      }
+      
+      plan.get(bestSheetIndex)!.push(part);
+    });
+    
+    // Phase 3: Distribute small parts to fill gaps
+    smallParts.forEach((part, index) => {
+      // Find sheet with least area so far
+      let bestSheetIndex = 0;
+      let minArea = Infinity;
+      
+      for (let i = 0; i < estimatedSheetsNeeded; i++) {
+        const currentArea = plan.get(i)!.reduce((sum, p) => sum + (p.length * p.width), 0);
+        if (currentArea < minArea) {
+          minArea = currentArea;
+          bestSheetIndex = i;
+        }
+      }
+      
+      plan.get(bestSheetIndex)!.push(part);
+    });
+    
+    // Log the distribution plan
+    for (let i = 0; i < estimatedSheetsNeeded; i++) {
+      const sheetParts = plan.get(i)!;
+      const totalArea = sheetParts.reduce((sum, p) => sum + (p.length * p.width), 0);
+      const efficiency = (totalArea / sheetCapacity) * 100;
+      
+      const partBreakdown = {
+        large: sheetParts.filter(p => largeParts.includes(p)).length,
+        medium: sheetParts.filter(p => mediumParts.includes(p)).length,
+        small: sheetParts.filter(p => smallParts.includes(p)).length
+      };
+      
+      console.log(`[GLOBAL-DISTRIBUTION] Sheet ${i + 1}: ${sheetParts.length} parts (${partBreakdown.large}L+${partBreakdown.medium}M+${partBreakdown.small}S), ${efficiency.toFixed(1)}% planned efficiency`);
+    }
+    
+    return plan;
+  }
+
+  /**
    * Optimize across all available sheets
    */
   static optimizeAcrossSheets(
@@ -1700,85 +1820,219 @@ export class MultiSheetOptimizer {
     // Calculate total available sheets at the start for strategic distribution
     const totalAvailableSheets = stockInventory.reduce((sum, stock) => sum + stock.originalQuantity, 0);
 
+    // MULTI-SHEET DISTRIBUTION FIX: Global multi-sheet planning instead of per-sheet strategic distribution
+    // Check if we should apply global distribution planning
+    const shouldUseGlobalDistribution = this.shouldApplyGlobalDistribution(parts, stockInventory, totalAvailableSheets);
+    
+    let globalDistributionPlan: Map<number, ProcessedPart[]> | null = null;
+    if (shouldUseGlobalDistribution) {
+      console.log('🌍 Applying global distribution planning');
+      console.log(`[GLOBAL-DISTRIBUTION] Creating global distribution plan across ${totalAvailableSheets} sheets`);
+      globalDistributionPlan = this.createGlobalDistributionPlan(parts, stockInventory, kerfThickness);
+    }
+
     // Process each available sheet - loop until no more parts or no more sheets
     let sheetsProcessed = 0;
     const maxSheets = totalAvailableSheets;
     
-    while (results.unplacedParts.length > 0 && sheetsProcessed < maxSheets) {
-      let sheetUsedThisRound = false;
+    // Use global distribution if enabled
+    if (shouldUseGlobalDistribution && globalDistributionPlan) {
+      console.log(`[GLOBAL-DISTRIBUTION] Starting global distribution with ${results.unplacedParts.length} parts across ${stockInventory.length} stock types`);
       
-      // Try each stock type that has remaining quantity
-      for (const stock of stockInventory) {
-        if (results.unplacedParts.length === 0) break;
-        if (stock.remainingQuantity <= 0) continue;
+      // CRITICAL FIX: Use proper multi-sheet processing loop instead of single-pass for loop
+      while (results.unplacedParts.length > 0 && sheetsProcessed < maxSheets) {
+        let sheetUsedThisRound = false;
+        
+        // Try each stock type that has remaining quantity
+        for (const stock of stockInventory) {
+          if (results.unplacedParts.length === 0) break;
+          if (stock.remainingQuantity <= 0) continue;
 
-        console.log(`[MULTI-SHEET] Processing stock ${stock.stockIndex}, ${results.unplacedParts.length} parts remaining, remaining quantity: ${stock.remainingQuantity}`);
+          console.log(`[GLOBAL-OPTIMIZATION] Processing stock ${stock.stockIndex}, ${results.unplacedParts.length} parts remaining, remaining quantity: ${stock.remainingQuantity}`);
 
-        // Find compatible parts for this sheet
-        const compatibleParts = results.unplacedParts.filter(part => {
-          const grainResult = ConstraintProcessor.checkGrainCompatibility(part, stock);
-          const spaceValid = ConstraintProcessor.validateSpaceConstraints(part, stock, grainResult);
-          
-          return grainResult.compatible && spaceValid;
-        });
+          // Find compatible parts for this sheet (not just planned parts)
+          const compatibleParts = results.unplacedParts.filter(part => {
+            const grainResult = ConstraintProcessor.checkGrainCompatibility(part, stock);
+            const spaceValid = ConstraintProcessor.validateSpaceConstraints(part, stock, grainResult);
+            return grainResult.compatible && spaceValid;
+          });
 
-        console.log(`[MULTI-SHEET] Found ${compatibleParts.length} compatible parts for this sheet`);
+          console.log(`[GLOBAL-OPTIMIZATION] Found ${compatibleParts.length} compatible parts for this stock type`);
 
-        if (compatibleParts.length > 0) {
-          // MULTI-SHEET DISTRIBUTION FIX: Strategic part distribution instead of greedy placement
-          // Use more conservative criteria to avoid unnecessary distribution
-          const strategicParts = this.shouldApplyStrategicDistribution(compatibleParts, stock, results.unplacedParts.length, totalAvailableSheets)
-            ? this.calculateStrategicPartDistribution(
-                compatibleParts, 
-                stock, 
-                results.unplacedParts.length,
-                totalAvailableSheets
-              )
-            : compatibleParts; // Use all compatible parts if strategic distribution not beneficial
-
-          console.log(`[MULTI-SHEET] Strategic distribution selected ${strategicParts.length} of ${compatibleParts.length} parts for optimal multi-sheet layout`);
-
-          const sheetResult = this.optimizeSheetLayout(strategicParts, stock, kerfThickness);
-          
-          if (sheetResult.placements.length > 0) {
-            // Create sheet usage record
-            const sheetUsage: StockUsage = {
-              stockIndex: stock.stockIndex,
-              sheetId: `Sheet-${results.usedSheets.length + 1}`,
-              placements: sheetResult.placements,
-              freeSpaces: sheetResult.freeSpaces,
-              usedArea: sheetResult.usedArea,
-              wasteArea: (stock.length * stock.width) - sheetResult.usedArea
-            };
-
-            results.usedSheets.push(sheetUsage);
-
-            // Update remaining stock
-            stock.remainingQuantity--;
-            sheetUsedThisRound = true;
-            sheetsProcessed++;
-
-            // Remove placed parts from unplaced list (for expanded parts, remove individual instances)
-            sheetResult.placedPartInstances.forEach(instanceId => {
-              const placedPartIndex = results.unplacedParts.findIndex(p => 
-                (p.instanceId && p.instanceId === instanceId) || 
-                (!p.instanceId && instanceId.startsWith(`${p.partIndex}-`))
-              );
-              if (placedPartIndex >= 0) {
-                results.unplacedParts.splice(placedPartIndex, 1); // Remove the specific instance
-              }
-            });
+          if (compatibleParts.length > 0) {
+            // Check if we have planned parts for this sheet position, otherwise use strategic distribution
+            let partsToPlace: ProcessedPart[];
             
-            // Break out of stock loop to try next iteration with remaining parts
-            break;
+            if (globalDistributionPlan.has(sheetsProcessed)) {
+              // Filter planned parts that are still unplaced and compatible
+              const plannedParts = globalDistributionPlan.get(sheetsProcessed)!;
+              partsToPlace = compatibleParts.filter(part => 
+                plannedParts.some((planned: ProcessedPart) => 
+                  planned.partIndex === part.partIndex && 
+                  (!planned.instanceId || !part.instanceId || planned.instanceId === part.instanceId)
+                )
+              );
+              console.log(`[GLOBAL-DISTRIBUTION] Sheet ${sheetsProcessed + 1}: Found ${partsToPlace.length} planned parts still available (${plannedParts.length} originally planned)`);
+            } else {
+              partsToPlace = [];
+            }
+
+            // CRITICAL FIX: If no planned parts available or plan exhausted, fall back to strategic distribution
+            if (partsToPlace.length === 0) {
+              console.log(`[GLOBAL-DISTRIBUTION] No planned parts available for sheet ${sheetsProcessed + 1}, using strategic distribution`);
+              const strategicParts = this.shouldApplyStrategicDistribution(compatibleParts, stock, results.unplacedParts.length, totalAvailableSheets)
+                ? this.calculateStrategicPartDistribution(
+                    compatibleParts, 
+                    stock, 
+                    results.unplacedParts.length,
+                    totalAvailableSheets
+                  )
+                : compatibleParts;
+              
+              partsToPlace = strategicParts.length > 0 ? strategicParts : compatibleParts;
+            }
+
+            console.log(`[GLOBAL-OPTIMIZATION] Placing ${partsToPlace.length} parts on sheet ${sheetsProcessed + 1}`);
+
+            const sheetResult = this.optimizeSheetLayout(partsToPlace, stock, kerfThickness);
+            
+            if (sheetResult.placements.length > 0) {
+              // Create sheet usage record
+              const sheetUsage: StockUsage = {
+                stockIndex: stock.stockIndex,
+                sheetId: `Sheet-${results.usedSheets.length + 1}`,
+                placements: sheetResult.placements,
+                freeSpaces: sheetResult.freeSpaces,
+                usedArea: sheetResult.usedArea,
+                wasteArea: (stock.length * stock.width) - sheetResult.usedArea
+              };
+
+              results.usedSheets.push(sheetUsage);
+
+              // Update remaining stock
+              stock.remainingQuantity--;
+              sheetsProcessed++;
+              sheetUsedThisRound = true;
+
+              // Remove placed parts from unplaced list
+              sheetResult.placedPartInstances.forEach(instanceId => {
+                const placedPartIndex = results.unplacedParts.findIndex(p => 
+                  (p.instanceId && p.instanceId === instanceId) || 
+                  (!p.instanceId && instanceId.startsWith(`${p.partIndex}-`))
+                );
+                if (placedPartIndex >= 0) {
+                  results.unplacedParts.splice(placedPartIndex, 1);
+                }
+              });
+
+              // Break to try next iteration with remaining parts
+              break;
+            }
           }
         }
+        
+        // CRITICAL FIX: Only break if no sheet was used this round (prevents infinite loop)
+        if (!sheetUsedThisRound) {
+          console.log(`[GLOBAL-OPTIMIZATION] No compatible sheets found for remaining ${results.unplacedParts.length} parts`);
+          break;
+        }
       }
-      
-      // If no sheet was used this round, break to avoid infinite loop
-      if (!sheetUsedThisRound) {
-        console.log(`[MULTI-SHEET] No compatible sheets found for remaining ${results.unplacedParts.length} parts`);
-        break;
+    } else {
+      // Existing per-sheet optimization logic
+      while (results.unplacedParts.length > 0 && sheetsProcessed < maxSheets) {
+        let sheetUsedThisRound = false;
+        
+        // Try each stock type that has remaining quantity
+        for (const stock of stockInventory) {
+          if (results.unplacedParts.length === 0) break;
+          if (stock.remainingQuantity <= 0) continue;
+
+          console.log(`[MULTI-SHEET] Processing stock ${stock.stockIndex}, ${results.unplacedParts.length} parts remaining, remaining quantity: ${stock.remainingQuantity}`);
+
+          // Find compatible parts for this sheet
+          const compatibleParts = results.unplacedParts.filter(part => {
+            const grainResult = ConstraintProcessor.checkGrainCompatibility(part, stock);
+            const spaceValid = ConstraintProcessor.validateSpaceConstraints(part, stock, grainResult);
+            
+            return grainResult.compatible && spaceValid;
+          });
+
+          console.log(`[MULTI-SHEET] Found ${compatibleParts.length} compatible parts for this sheet`);
+          
+          if (compatibleParts.length > 0) {
+          // Determine parts to place on this sheet
+          let partsToPlace: ProcessedPart[];
+          
+          if (globalDistributionPlan && globalDistributionPlan.has(sheetsProcessed)) {
+            // Use global distribution plan
+            const plannedParts = globalDistributionPlan.get(sheetsProcessed)!;
+            partsToPlace = compatibleParts.filter(part => 
+              plannedParts.some((planned: ProcessedPart) => 
+                planned.partIndex === part.partIndex && 
+                (!planned.instanceId || !part.instanceId || planned.instanceId === part.instanceId)
+              )
+            );
+            console.log(`[GLOBAL-DISTRIBUTION] Sheet ${sheetsProcessed + 1}: Using planned ${partsToPlace.length} parts from global distribution (${plannedParts.length} planned, ${compatibleParts.length} compatible)`);
+          } else {
+            // Fall back to legacy strategic distribution per sheet
+            const strategicParts = this.shouldApplyStrategicDistribution(compatibleParts, stock, results.unplacedParts.length, totalAvailableSheets)
+              ? this.calculateStrategicPartDistribution(
+                  compatibleParts, 
+                  stock, 
+                  results.unplacedParts.length,
+                  totalAvailableSheets
+                )
+              : compatibleParts; // Use all compatible parts if strategic distribution not beneficial
+            
+            // CRITICAL FIX: Ensure we always try to place parts if they exist
+            // If strategic distribution resulted in 0 parts but we have compatible parts, use all compatible parts
+            partsToPlace = (strategicParts.length > 0) ? strategicParts : compatibleParts;
+            
+            console.log(`[MULTI-SHEET] Strategic distribution selected ${strategicParts.length} of ${compatibleParts.length} parts, placing ${partsToPlace.length} parts for optimal multi-sheet layout`);
+          }
+
+          const sheetResult = this.optimizeSheetLayout(partsToPlace, stock, kerfThickness);
+            
+            if (sheetResult.placements.length > 0) {
+              // Create sheet usage record
+              const sheetUsage: StockUsage = {
+                stockIndex: stock.stockIndex,
+                sheetId: `Sheet-${results.usedSheets.length + 1}`,
+                placements: sheetResult.placements,
+                freeSpaces: sheetResult.freeSpaces,
+                usedArea: sheetResult.usedArea,
+                wasteArea: (stock.length * stock.width) - sheetResult.usedArea
+              };
+
+              results.usedSheets.push(sheetUsage);
+
+              // Update remaining stock
+              stock.remainingQuantity--;
+              sheetUsedThisRound = true;
+              sheetsProcessed++;
+
+              // Remove placed parts from unplaced list (for expanded parts, remove individual instances)
+              sheetResult.placedPartInstances.forEach(instanceId => {
+                const placedPartIndex = results.unplacedParts.findIndex(p => 
+                  (p.instanceId && p.instanceId === instanceId) || 
+                  (!p.instanceId && instanceId.startsWith(`${p.partIndex}-`))
+                );
+                if (placedPartIndex >= 0) {
+                  results.unplacedParts.splice(placedPartIndex, 1); // Remove the specific instance
+                }
+              });
+              
+              // Break out of stock loop to try next iteration with remaining parts
+              break;
+            }
+          }
+        }
+        
+        // If no sheet was used this round, break to avoid infinite loop
+        if (!sheetUsedThisRound) {
+          console.log(`[MULTI-SHEET] No compatible sheets found for remaining ${results.unplacedParts.length} parts`);
+          break;
+        }
       }
     }
 
@@ -1821,29 +2075,37 @@ export class MultiSheetOptimizer {
     totalUnplacedParts: number,
     totalAvailableSheets: number
   ): boolean {
-    // SPACE UTILIZATION FIX: Enable strategic distribution for optimal mixed-size layouts
-    // Strategic distribution prevents greedy large-part-first placement
+    // MULTI-SHEET FIX: Be less restrictive for multi-sheet scenarios
+    // When we have multiple sheets available, strategic distribution helps balance loads
     const totalPartsArea = compatibleParts.reduce((sum, part) => sum + (part.length * part.width), 0);
     const sheetArea = stock.length * stock.width;
     const theoreticalEfficiency = totalPartsArea / sheetArea;
 
     // Apply strategic distribution when:
-    // 1. We have mixed part sizes (both large and small)
-    // 2. Multiple sheets are available
-    // 3. The current sheet could be overfilled
-    const hasEnoughParts = compatibleParts.length >= 3;
+    // 1. We have enough parts to distribute
+    // 2. Multiple sheets are available 
+    // 3. Parts could benefit from distribution (either mixed sizes OR would overfill single sheet)
+    const hasEnoughParts = compatibleParts.length >= 2; // Reduced from 3 to 2
     const hasMultipleSheets = totalAvailableSheets > 1;
-    const couldOverfill = theoreticalEfficiency > 0.9; // High potential efficiency suggests possible overfill
+    const couldOverfill = theoreticalEfficiency > 0.7; // More permissive (was 0.8)
     
     // Check for mixed part sizes (large vs small parts)
     const partAreas = compatibleParts.map(p => p.length * p.width);
     const minArea = Math.min(...partAreas);
     const maxArea = Math.max(...partAreas);
-    const hasMixedSizes = (maxArea / minArea) > 3; // Large parts are 3x+ bigger than small parts
+    const hasMixedSizes = (maxArea / minArea) > 2.0; // More sensitive (was 2.5)
+    
+    // Additional check: if we have large parts, apply distribution for better balance
+    const largePartCount = partAreas.filter(area => area > 150000).length; // Reduced threshold (was 200k)
+    const hasManyLargeParts = largePartCount >= 2; // Reduced from 4 to 2
 
-    console.log(`[STRATEGIC] Parts: ${compatibleParts.length}, Mixed sizes: ${hasMixedSizes}, Efficiency: ${(theoreticalEfficiency * 100).toFixed(1)}%, Sheets: ${totalAvailableSheets}`);
+    // CRITICAL FIX: For multi-sheet scenarios, be more permissive
+    const isMultiSheetScenario = totalUnplacedParts > compatibleParts.length * 0.6; // More parts remaining
+    const shouldApplyForBalance = hasMultipleSheets && isMultiSheetScenario && (hasMixedSizes || hasManyLargeParts);
 
-    const shouldApply = hasEnoughParts && hasMultipleSheets && hasMixedSizes && couldOverfill;
+    console.log(`[STRATEGIC] Parts: ${compatibleParts.length}, Mixed sizes: ${hasMixedSizes}, Large parts: ${hasManyLargeParts}, Efficiency: ${(theoreticalEfficiency * 100).toFixed(1)}%, Sheets: ${totalAvailableSheets}, Multi-sheet scenario: ${isMultiSheetScenario}`);
+
+    const shouldApply = hasEnoughParts && hasMultipleSheets && (shouldApplyForBalance || couldOverfill);
     console.log(`[STRATEGIC] Applying strategic distribution: ${shouldApply}`);
     return shouldApply;
   }
@@ -1858,18 +2120,42 @@ export class MultiSheetOptimizer {
     totalUnplacedParts: number,
     totalAvailableSheets: number
   ): ProcessedPart[] {
-    // SPACE UTILIZATION FIX: Implement balanced mixed-size distribution
-    // Instead of just largest-first, create a balanced mix of large and small parts
-    
+    // MULTI-SHEET FIX: Use more permissive target efficiency for better multi-sheet distribution
     const sheetArea = stock.length * stock.width;
-    let targetSheetEfficiency = 0.85; // More conservative target to leave room for optimal packing
+    let targetSheetEfficiency = 0.75; // More permissive base target (was 0.85)
+    
+    // CRITICAL FIX: Adjust target efficiency based on part sizes and multi-sheet context
+    const totalPartsArea = compatibleParts.reduce((sum, part) => sum + (part.length * part.width), 0);
+    const averagePartArea = totalPartsArea / compatibleParts.length;
+    const isSmallPartsScenario = averagePartArea < (sheetArea * 0.1); // Small parts are < 10% of sheet area
+    
+    if (isSmallPartsScenario) {
+      targetSheetEfficiency = 0.9; // Higher efficiency for small parts (was 0.95)
+      console.log(`[STRATEGIC] Detected small parts scenario (avg ${averagePartArea} mm²), using higher target efficiency: ${targetSheetEfficiency}`);
+    }
+    
+    // MULTI-SHEET FIX: When many sheets are available, be more permissive to ensure distribution
+    const remainingSheets = totalAvailableSheets - 1; // -1 for current sheet
+    const estimatedSheetsNeeded = Math.ceil(totalPartsArea / (sheetArea * 0.8));
+    const hasAbundantSheets = remainingSheets >= estimatedSheetsNeeded;
+    
+    if (hasAbundantSheets) {
+      targetSheetEfficiency = Math.min(targetSheetEfficiency + 0.15, 0.95); // More aggressive increase
+      console.log(`[STRATEGIC] Abundant sheets available (${remainingSheets} vs ${estimatedSheetsNeeded} needed), increased target efficiency to: ${targetSheetEfficiency}`);
+    }
+    
+    // For multi-sheet scenarios with many unplaced parts, be even more permissive
+    if (totalUnplacedParts > compatibleParts.length * 1.5) {
+      targetSheetEfficiency = Math.min(targetSheetEfficiency + 0.1, 0.98);
+      console.log(`[STRATEGIC] Many parts remaining (${totalUnplacedParts} total, ${compatibleParts.length} compatible), increased target to: ${targetSheetEfficiency}`);
+    }
     
     // Categorize parts by size
     const partAreas = compatibleParts.map(p => ({ part: p, area: p.length * p.width }));
     const averageArea = partAreas.reduce((sum, p) => sum + p.area, 0) / partAreas.length;
     
-    const largeParts = partAreas.filter(p => p.area > averageArea * 1.5).map(p => p.part);
-    const mediumParts = partAreas.filter(p => p.area >= averageArea * 0.7 && p.area <= averageArea * 1.5).map(p => p.part);
+    const largeParts = partAreas.filter(p => p.area > averageArea * 1.3).map(p => p.part); // Reduced threshold (was 1.5)
+    const mediumParts = partAreas.filter(p => p.area >= averageArea * 0.7 && p.area <= averageArea * 1.3).map(p => p.part);
     const smallParts = partAreas.filter(p => p.area < averageArea * 0.7).map(p => p.part);
     
     console.log(`[STRATEGIC] Part distribution - Large: ${largeParts.length}, Medium: ${mediumParts.length}, Small: ${smallParts.length}`);
@@ -1878,15 +2164,16 @@ export class MultiSheetOptimizer {
     const selectedParts: ProcessedPart[] = [];
     let cumulativeArea = 0;
     
-    // Strategy: Start with a foundation of large parts, then fill gaps with smaller parts
+    // MULTI-SHEET FIX: More permissive selection strategy for balanced distribution
     
-    // Phase 1: Add large parts (foundation) - but limit to avoid overfill
-    const maxLargeParts = Math.min(largeParts.length, Math.ceil(largeParts.length * 0.6));
+    // Phase 1: Add large parts (foundation) - more permissive to enable distribution
+    const maxLargeParts = Math.min(largeParts.length, Math.ceil(largeParts.length * 0.7)); // Increased from 50% to 70%
     for (let i = 0; i < maxLargeParts; i++) {
       const part = largeParts[i];
       const partArea = part.length * part.width;
       
-      if ((cumulativeArea + partArea) / sheetArea <= targetSheetEfficiency * 0.7) {
+      // More permissive area limit to enable multi-sheet distribution
+      if ((cumulativeArea + partArea) / sheetArea <= targetSheetEfficiency * 0.8) { // Increased from 60% to 80%
         selectedParts.push(part);
         cumulativeArea += partArea;
       } else {

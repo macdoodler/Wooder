@@ -52,7 +52,7 @@ export const handleSheetMaterialCutting = (
 
     // Try to place parts on this sheet
     let placedOnThisSheet = 0;
-    const maxAttemptsPerSheet = 100;
+    const maxAttemptsPerSheet = 500; // INCREASED: Support placing many small parts without artificial limits
     let attempts = 0;
     
     while (remainingQuantity > 0 && attempts < maxAttemptsPerSheet) {
@@ -248,7 +248,7 @@ export const handleSheetMaterialCutting = (
         
         // Try to place parts on this new sheet
         let placedOnNewSheet = 0;
-        const maxAttemptsPerSheet = 100;
+        const maxAttemptsPerSheet = 500; // INCREASED: Support placing many small parts without artificial limits
         let attempts = 0;
         
         while (remainingQuantity > 0 && attempts < maxAttemptsPerSheet) {
